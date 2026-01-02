@@ -1,0 +1,91 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>in.virit.sb</groupId>
+        <artifactId>viritin-addon-project-parent</artifactId>
+        <version>0.0.9</version>
+        <relativePath/>
+    </parent>
+    <groupId>org.example</groupId>
+    <artifactId>svg-visualizations</artifactId>
+    <version>1.0-SNAPSHOT</version>
+    <name>svg-vizualizations</name>
+    <packaging>jar</packaging>
+    <organization>
+        <name>Vaadin Community</name>
+    </organization>
+    <properties>
+        <!-- The version used while developing/testing, update every once in a while -->
+        <vaadin.version>25.0.2</vaadin.version>
+        <github.account>viritin</github.account>
+        <github.project>svg-visualizations</github.project>
+    </properties>
+    <scm>
+        <url>https://github.com/${github.account}/${github.project}</url>
+        <connection>scm:git:git://github.com/${github.account}/${github.project}.git</connection>
+        <developerConnection>scm:git:ssh://git@github.com:/${github.account}/${github.project}.git</developerConnection>
+    </scm>
+    <issueManagement>
+        <system>GitHub</system>
+        <url>https://github.com/${github.account}/${github.project}/issues</url>
+    </issueManagement>
+    <licenses>
+        <license>
+            <name>Apache 2</name>
+            <url>http://www.apache.org/licenses/LICENSE-2.0.txt</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+    <dependencies>
+        <dependency>
+            <!-- Utilizes the optimized Element API for SVG namespace -->
+            <groupId>in.virit</groupId>
+            <artifactId>viritin</artifactId>
+            <version>3.1.1</version>
+        </dependency>
+        <dependency>
+            <groupId>com.vaadin</groupId>
+            <artifactId>vaadin-core</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
+
+        <dependency>
+            <groupId>com.vaadin</groupId>
+            <artifactId>vaadin-dev</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- Spring Boot & vaadin starter coming in to test scope via parent -->
+
+        <!-- These here are all optional, but probably handy for testing -->        
+
+                
+        <dependency>
+            <groupId>in.virit</groupId>
+            <artifactId>mopo</artifactId>
+            <version>0.0.6</version>
+            <scope>test</scope>
+         </dependency>
+
+        
+        <!-- Devtools is cool, especially if you don't have JRebel -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-devtools</artifactId>
+            <scope>test</scope>
+            <optional>true</optional>
+        </dependency>
+
+    </dependencies>
+    
+    <build>
+        <plugins>
+            <!-- Note, relevant build and publishing plugins inherited via parent.
+                 See: https://github.com/viritin/viritin-sb/blob/feature/dev-scope-main-method/addon-project-parent/pom.xml
+             -->
+
+        </plugins>
+    </build>
+
+</project>
