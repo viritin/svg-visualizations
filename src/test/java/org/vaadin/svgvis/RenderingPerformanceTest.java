@@ -3,10 +3,14 @@ package org.vaadin.svgvis;
 import com.github.mvysny.kaributesting.v10.MockVaadin;
 import com.vaadin.flow.component.UI;
 import in.virit.color.NamedColor;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.MethodOrderer;
+import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestMethodOrder;
 import org.vaadin.svgvis.testdata.RawWeatherStationData;
 import org.vaadin.svgvis.testdata.WeatherData;
 
@@ -19,19 +23,39 @@ import java.util.List;
  * Uses Karibu Testing to mock Vaadin UI for realistic component rendering.
  * Assertions are disabled via maven-surefire-plugin configuration in pom.xml
  * to work around Vaadin Flow internal assertions with SVG elements.
+ *
+ * Performance readings are saved to performance-baseline.properties and
+ * compared against previous runs. Tests fail if performance degrades by
+ * more than 100% (configurable via TOLERANCE constant).
  */
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 public class RenderingPerformanceTest {
 
     private static List<RawWeatherStationData> allData;
     private static final int WARMUP_ITERATIONS = 3;
     private static final int MEASURE_ITERATIONS = 5;
 
+    /** Tolerance for performance regression (1.0 = 100% slower is acceptable) */
+    private static final double TOLERANCE = 1.0;
+
+    private static PerformanceBaseline baseline;
+
     @BeforeAll
     static void loadData() {
         // Set production mode to disable development mode assertions
         System.setProperty("vaadin.productionMode", "true");
         allData = WeatherData.getAll();
+
+        baseline = new PerformanceBaseline();
+        baseline.printSystemInfo();
+
         System.out.println("Loaded " + allData.size() + " weather records for performance testing");
+    }
+
+    @AfterAll
+    static void saveBaseline() {
+        baseline.printSummary();
+        baseline.saveBaseline();
     }
 
     @BeforeEach
@@ -45,6 +69,7 @@ public class RenderingPerformanceTest {
     }
 
     @Test
+    @Order(1)
     void measureSparkLineDrawTime() {
         System.out.println("\n=== SparkLine draw() CPU Time Analysis ===\n");
         System.out.println("Measuring time to execute draw() with real components...\n");
@@ -68,6 +93,11 @@ public class RenderingPerformanceTest {
             long movingAvgTime = measureDrawTime(points, SvgSparkLine.Smoothing.MOVING_AVERAGE);
             long rdpTime = measureDrawTime(points, SvgSparkLine.Smoothing.RDP);
 
+            // Record key measurements for baseline comparison
+            baseline.record("sparkline.none." + size, noneTime);
+            baseline.record("sparkline.movingAvg." + size, movingAvgTime);
+            baseline.record("sparkline.rdp." + size, rdpTime);
+
             System.out.printf("%,12d | %14s | %14s | %s%n",
                     points.size(), formatTime(noneTime), formatTime(movingAvgTime), formatTime(rdpTime));
         }
@@ -76,6 +106,7 @@ public class RenderingPerformanceTest {
     }
 
     @Test
+    @Order(2)
     void measureWindRoseDrawTime() {
         System.out.println("\n=== WindRose draw() CPU Time Analysis ===\n");
         System.out.println("Measuring time to aggregate and draw WindRose with real components...\n");
@@ -106,6 +137,10 @@ public class RenderingPerformanceTest {
             // Measure draw time with real component
             long drawTime = measureWindRoseDrawTime(duration, energy, sectors);
 
+            // Record key measurements
+            baseline.record("windrose.aggregation." + size, aggTime);
+            baseline.record("windrose.draw." + size, drawTime);
+
             System.out.printf("%,13d | %14s | %14s | %s%n",
                     size, formatTime(aggTime), formatTime(drawTime), formatTime(aggTime + drawTime));
         }
@@ -114,6 +149,7 @@ public class RenderingPerformanceTest {
     }
 
     @Test
+    @Order(3)
     void measureScalingBehavior() {
         System.out.println("\n=== Scaling Behavior Analysis ===\n");
         System.out.println("Comparing how draw time scales with data size...\n");
@@ -149,6 +185,11 @@ public class RenderingPerformanceTest {
             long maTime = measureDrawTime(points, SvgSparkLine.Smoothing.MOVING_AVERAGE);
             long rdpTime = measureDrawTime(points, SvgSparkLine.Smoothing.RDP);
 
+            // Record scaling measurements
+            baseline.record("scaling.none." + mult + "x", noneTime);
+            baseline.record("scaling.movingAvg." + mult + "x", maTime);
+            baseline.record("scaling.rdp." + mult + "x", rdpTime);
+
             System.out.printf("%10dx | %,12d | %8s (%4.1fx) | %8s (%4.1fx) | %8s (%4.1fx)%n",
                     mult, points.size(),
                     formatTime(noneTime), (double) noneTime / baseNone,
@@ -161,6 +202,7 @@ public class RenderingPerformanceTest {
     }
 
     @Test
+    @Order(4)
     void measureOutputSizeVsDrawTime() {
         System.out.println("\n=== Output Size vs Draw Time ===\n");
         System.out.println("Comparing output point count and actual draw time...\n");
@@ -197,6 +239,7 @@ public class RenderingPerformanceTest {
     }
 
     @Test
+    @Order(5)
     void measureMultiSeriesDrawTime() {
         System.out.println("\n=== Multi-Series SparkLine Draw Time ===\n");
         System.out.println("Measuring draw time with multiple data series...\n");
@@ -220,11 +263,58 @@ public class RenderingPerformanceTest {
             long maTime = measureMultiSeriesDrawTime(tempPoints, windPoints, seriesCount, SvgSparkLine.Smoothing.MOVING_AVERAGE);
             long rdpTime = measureMultiSeriesDrawTime(tempPoints, windPoints, seriesCount, SvgSparkLine.Smoothing.RDP);
 
+            // Record multi-series measurements
+            baseline.record("multiseries.movingAvg." + seriesCount + "series", maTime);
+            baseline.record("multiseries.rdp." + seriesCount + "series", rdpTime);
+
             System.out.printf("%12d | %14s | %s%n",
                     seriesCount, formatTime(maTime), formatTime(rdpTime));
         }
 
         System.out.println("\nDraw time scales with number of series.");
+    }
+
+    /**
+     * Validates that key performance metrics are within acceptable tolerance.
+     * This test runs last and fails if any metric regressed significantly.
+     */
+    @Test
+    @Order(100)
+    void validatePerformanceNotRegressed() {
+        System.out.println("\n=== Performance Regression Validation ===\n");
+        System.out.println("Checking key metrics against baseline (tolerance: " + (int)(TOLERANCE * 100) + "%)...\n");
+
+        // Key metrics to validate - these are the most important for real-world usage
+        String[] criticalMetrics = {
+                // Large dataset with smoothing (most common use case)
+                "sparkline.movingAvg.100000",
+                "sparkline.rdp.100000",
+                // Full dataset
+                "sparkline.movingAvg." + allData.size(),
+                "sparkline.rdp." + allData.size(),
+                // WindRose operations
+                "windrose.draw.100000",
+                // Multi-series
+                "multiseries.movingAvg.3series",
+                "multiseries.rdp.3series"
+        };
+
+        int failures = 0;
+        for (String metric : criticalMetrics) {
+            try {
+                baseline.assertWithinTolerance(metric, TOLERANCE);
+            } catch (AssertionError e) {
+                failures++;
+                System.err.println("FAIL: " + e.getMessage());
+            }
+        }
+
+        if (failures > 0) {
+            throw new AssertionError(failures + " performance metric(s) exceeded tolerance. " +
+                    "Review output above and update baseline if regression is expected.");
+        }
+
+        System.out.println("\nAll critical metrics within tolerance.");
     }
 
     private long measureDrawTime(List<SvgSparkLine.DataPoint> points, SvgSparkLine.Smoothing smoothing) {
