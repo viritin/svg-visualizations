@@ -103,7 +103,7 @@ public class SvgSparkLine extends VSvg {
      */
     public void setData(List<DataPoint> points) {
         this.dataPoints = normalizeDataPoints(points);
-        this.additionalSeries.clear();
+        this.additionalSeries = new ArrayList<>();
     }
 
     /**
@@ -116,7 +116,7 @@ public class SvgSparkLine extends VSvg {
             points.add(new DataPoint(i, values[i]));
         }
         this.dataPoints = normalizeDataPoints(points);
-        this.additionalSeries.clear();
+        this.additionalSeries = new ArrayList<>();
     }
 
     /**
@@ -131,7 +131,7 @@ public class SvgSparkLine extends VSvg {
             points.add(new DataPoint(xPositions[i], values[i]));
         }
         this.dataPoints = normalizeDataPoints(points);
-        this.additionalSeries.clear();
+        this.additionalSeries = new ArrayList<>();
     }
 
     /**
@@ -146,7 +146,7 @@ public class SvgSparkLine extends VSvg {
             points.add(DataPoint.of(timestamps[i], values[i]));
         }
         this.dataPoints = normalizeDataPoints(points);
-        this.additionalSeries.clear();
+        this.additionalSeries = new ArrayList<>();
     }
 
     /**
@@ -514,9 +514,12 @@ public class SvgSparkLine extends VSvg {
         getElement().executeJs("if(this._updateTextScale) requestAnimationFrame(this._updateTextScale)");
 
         // Clear data after drawing - SVG elements are already created,
-        // data is no longer needed and would only consume session memory
-        dataPoints = List.of();
-        additionalSeries = List.of();
+        // data is no longer needed and would only consume session memory.
+        // Only clear if attached (otherwise onAttach will call draw() again).
+        if (getElement().getNode().isAttached()) {
+            dataPoints = new ArrayList<>();
+            additionalSeries = new ArrayList<>();
+        }
     }
 
     private SvgGraphicsElement createLineFromSmoothed(List<DataPoint> seriesData, Color color, double min, double max) {
