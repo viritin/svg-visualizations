@@ -282,51 +282,6 @@ public class SvgSparkLine extends VSvg {
         this.crosshairEnabled = listener != null;
     }
 
-    /**
-     * Get the data value at a relative position (0.0 to 1.0).
-     */
-    public double getValueAt(double relativePosition) {
-        if (dataPoints.isEmpty()) return 0;
-        int index = getIndexAt(relativePosition);
-        return dataPoints.get(index).y();
-    }
-
-    /**
-     * Get the data index at a relative position (0.0 to 1.0).
-     * Uses binary search to find the closest data point.
-     */
-    public int getIndexAt(double relativePosition) {
-        if (dataPoints.isEmpty()) return 0;
-
-        // Binary search for closest x position
-        int low = 0;
-        int high = dataPoints.size() - 1;
-        while (low < high) {
-            int mid = (low + high) / 2;
-            if (dataPoints.get(mid).x() < relativePosition) {
-                low = mid + 1;
-            } else {
-                high = mid;
-            }
-        }
-        // Check if previous index is closer
-        if (low > 0) {
-            double prevDist = Math.abs(dataPoints.get(low - 1).x() - relativePosition);
-            double currDist = Math.abs(dataPoints.get(low).x() - relativePosition);
-            if (prevDist < currDist) {
-                return low - 1;
-            }
-        }
-        return low;
-    }
-
-    /**
-     * Get the current data points (normalized).
-     */
-    public List<DataPoint> getDataPoints() {
-        return dataPoints;
-    }
-
     @Override
     protected void onAttach(AttachEvent attachEvent) {
         super.onAttach(attachEvent);
@@ -444,6 +399,26 @@ public class SvgSparkLine extends VSvg {
 
         if (dataPoints.isEmpty()) return;
 
+        // Apply smoothing to primary data BEFORE computing min/max
+        // This reduces memory footprint and ensures crosshair uses displayed values
+        if (smoothing == Smoothing.MOVING_AVERAGE) {
+            dataPoints = applyMovingAverage(dataPoints);
+        } else if (smoothing == Smoothing.RDP) {
+            dataPoints = applyRdpToDataPoints(dataPoints);
+        }
+
+        // Apply smoothing to additional series
+        List<DataSeries> smoothedSeries = new ArrayList<>();
+        for (DataSeries series : additionalSeries) {
+            List<DataPoint> smoothedData = switch (smoothing) {
+                case MOVING_AVERAGE -> applyMovingAverage(series.data());
+                case RDP -> applyRdpToDataPoints(series.data());
+                default -> series.data();
+            };
+            smoothedSeries.add(new DataSeries(smoothedData, series.color()));
+        }
+        additionalSeries = smoothedSeries;
+
         // Compute global min/max across primary and all additional series
         double min = dataPoints.getFirst().y();
         double max = dataPoints.getFirst().y();
@@ -482,11 +457,11 @@ public class SvgSparkLine extends VSvg {
         final double finalMin = min;
         final double finalMax = max;
         for (DataSeries series : additionalSeries) {
-            getElement().appendChild(createLine(series.data(), series.color(), finalMin, finalMax));
+            getElement().appendChild(createLineFromSmoothed(series.data(), series.color(), finalMin, finalMax));
         }
 
         // Draw primary series
-        getElement().appendChild(createLine(dataPoints, lineColor, min, max));
+        getElement().appendChild(createLineFromSmoothed(dataPoints, lineColor, min, max));
 
         // Labels
         TextElement minLabel = new TextElement(0, minY - 2, String.format("%.1f", min))
@@ -537,31 +512,26 @@ public class SvgSparkLine extends VSvg {
         }
 
         getElement().executeJs("if(this._updateTextScale) requestAnimationFrame(this._updateTextScale)");
+
+        // Clear data after drawing - SVG elements are already created,
+        // data is no longer needed and would only consume session memory
+        dataPoints = List.of();
+        additionalSeries = List.of();
     }
 
-    private SvgGraphicsElement createLine(List<DataPoint> seriesData, Color color, double min, double max) {
-        // Apply smoothing if configured
-        List<DataPoint> smoothedData = (smoothing == Smoothing.MOVING_AVERAGE)
-                ? applyMovingAverage(seriesData)
-                : seriesData;
-
-        // Convert to screen coordinates
-        List<double[]> points = new ArrayList<>(smoothedData.size());
-        for (DataPoint dp : smoothedData) {
+    private SvgGraphicsElement createLineFromSmoothed(List<DataPoint> seriesData, Color color, double min, double max) {
+        // Convert to screen coordinates (data is already smoothed/reduced)
+        List<double[]> points = new ArrayList<>(seriesData.size());
+        for (DataPoint dp : seriesData) {
             double x = dp.x() * viewBoxWidth;
             double y = height - (dp.y() - min) / (max - min) * height + fontSize;
             points.add(new double[]{x, y});
         }
 
-        // Apply point reduction if using RDP
-        List<double[]> finalPoints = (smoothing == Smoothing.RDP)
-                ? ramerDouglasPeucker(points, rdpEpsilon)
-                : points;
-
-        if (useBezierCurve && finalPoints.size() >= 2) {
-            return createBezierPath(finalPoints, color);
+        if (useBezierCurve && points.size() >= 2) {
+            return createBezierPath(points, color);
         } else {
-            return createPolyline(finalPoints, color);
+            return createPolyline(points, color);
         }
     }
 
@@ -668,6 +638,42 @@ public class SvgSparkLine extends VSvg {
         // If we got too few points (very sparse data), use original
         if (result.size() < 3) {
             return data;
+        }
+
+        return result;
+    }
+
+    /**
+     * Applies RDP algorithm to reduce data points while preserving shape.
+     * Works on normalized DataPoints (x in 0-1 range).
+     */
+    private List<DataPoint> applyRdpToDataPoints(List<DataPoint> data) {
+        if (data.size() < 3) {
+            return data;
+        }
+
+        // Find min/max y for normalization (to make epsilon scale-independent)
+        double minY = data.stream().mapToDouble(DataPoint::y).min().orElse(0);
+        double maxY = data.stream().mapToDouble(DataPoint::y).max().orElse(1);
+        double rangeY = maxY - minY;
+        if (rangeY < 0.001) rangeY = 1;
+
+        // Convert to double[] with normalized y values
+        List<double[]> points = new ArrayList<>(data.size());
+        for (DataPoint dp : data) {
+            double normalizedY = (dp.y() - minY) / rangeY;
+            points.add(new double[]{dp.x(), normalizedY});
+        }
+
+        // Apply RDP with epsilon relative to normalized scale
+        double normalizedEpsilon = rdpEpsilon / viewBoxWidth;
+        List<double[]> reduced = ramerDouglasPeucker(points, normalizedEpsilon);
+
+        // Convert back to DataPoints with original y values
+        List<DataPoint> result = new ArrayList<>(reduced.size());
+        for (double[] pt : reduced) {
+            double originalY = pt[1] * rangeY + minY;
+            result.add(new DataPoint(pt[0], originalY));
         }
 
         return result;

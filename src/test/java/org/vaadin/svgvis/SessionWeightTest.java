@@ -125,8 +125,8 @@ public class SessionWeightTest {
 
         int[] dataSizes = {1000, 10000, 100000, allData.size()};
 
-        System.out.println("Size         | Raw Data       | DataPoints     | WindRose (16 sectors)");
-        System.out.println("-------------|----------------|----------------|----------------------");
+        System.out.println("Size         | Raw Data       | Before Draw    | After Smooth   | After Draw     | WindRose");
+        System.out.println("-------------|----------------|----------------|----------------|----------------|----------");
 
         for (int size : dataSizes) {
             if (size > allData.size()) continue;
@@ -136,11 +136,18 @@ public class SessionWeightTest {
             // Raw data
             int rawSize = measureSerializedSize(new ArrayList<>(subset));
 
-            // DataPoints (what SparkLine stores)
-            List<SvgSparkLine.DataPoint> points = subset.stream()
+            // DataPoints before smoothing (what was stored before the fix)
+            List<SvgSparkLine.DataPoint> pointsBefore = subset.stream()
                     .map(d -> SvgSparkLine.DataPoint.of(d.getInstant(), d.getTempfC()))
                     .toList();
-            int pointsSize = measureSerializedSize(new ArrayList<>(points));
+            int beforeSize = measureSerializedSize(new ArrayList<>(pointsBefore));
+
+            // DataPoints after MOVING_AVERAGE smoothing (before clearing)
+            List<SvgSparkLine.DataPoint> pointsMovingAvg = applyMovingAverage(pointsBefore);
+            int afterSmoothSize = measureSerializedSize(new ArrayList<>(pointsMovingAvg));
+
+            // After draw() clears data - empty list
+            int afterDrawSize = measureSerializedSize(new ArrayList<>(List.of()));
 
             // WindRose aggregated data
             int sectors = 16;
@@ -151,12 +158,192 @@ public class SessionWeightTest {
             }
             int windRoseSize = measureSerializedSize(duration);
 
-            System.out.printf("%,12d | %14s | %14s | %s%n",
-                    size, formatBytes(rawSize), formatBytes(pointsSize), formatBytes(windRoseSize));
+            System.out.printf("%,12d | %14s | %14s | %14s | %14s | %s%n",
+                    size, formatBytes(rawSize), formatBytes(beforeSize),
+                    formatBytes(afterSmoothSize), formatBytes(afterDrawSize), formatBytes(windRoseSize));
         }
 
-        System.out.println("\nKey insight: WindRose has O(1) session weight, SparkLine has O(n) weight.");
-        System.out.println("For large datasets, consider aggregation strategies to reduce session size.");
+        System.out.println("\nKey insight: After draw(), SparkLine clears all data - session weight is ~0!");
+        System.out.println("Data is only needed during draw(), SVG elements retain the visualization.");
+    }
+
+    @Test
+    void measureRdpReduction() throws IOException {
+        System.out.println("\n=== RDP Algorithm Point Reduction ===\n");
+        System.out.println("Measuring how RDP reduces data points while preserving shape...\n");
+
+        int[] dataSizes = {100, 1000, 10000, 50000, 100000, allData.size()};
+
+        System.out.println("Input Points | RDP Points | Reduction | Serialized Size");
+        System.out.println("-------------|------------|-----------|----------------");
+
+        for (int size : dataSizes) {
+            if (size > allData.size()) continue;
+
+            List<RawWeatherStationData> subset = allData.subList(allData.size() - size, allData.size());
+
+            List<SvgSparkLine.DataPoint> points = subset.stream()
+                    .filter(RawWeatherStationData::hasValidAirTemp)
+                    .map(d -> SvgSparkLine.DataPoint.of(d.getInstant(), d.getTempfC()))
+                    .toList();
+
+            List<SvgSparkLine.DataPoint> rdpPoints = applyRdp(points);
+            int serializedSize = measureSerializedSize(new ArrayList<>(rdpPoints));
+            double reduction = points.size() > 0 ? (1.0 - (double) rdpPoints.size() / points.size()) * 100 : 0;
+
+            System.out.printf("%,12d | %10d | %8.1f%% | %s%n",
+                    points.size(), rdpPoints.size(), reduction, formatBytes(serializedSize));
+        }
+
+        System.out.println("\nRDP preserves shape-significant points, so reduction varies with data complexity.");
+    }
+
+    /**
+     * Simulates the moving average smoothing from SvgSparkLine.
+     * TARGET_POINTS is 50. First normalizes x values to 0-1 range like the component does.
+     */
+    private List<SvgSparkLine.DataPoint> applyMovingAverage(List<SvgSparkLine.DataPoint> data) {
+        int TARGET_POINTS = 50;
+        if (data.size() <= TARGET_POINTS) {
+            return data;
+        }
+
+        // Normalize x values to 0-1 range (like SvgSparkLine.normalizeDataPoints does)
+        double minX = data.stream().mapToDouble(SvgSparkLine.DataPoint::x).min().orElse(0);
+        double maxX = data.stream().mapToDouble(SvgSparkLine.DataPoint::x).max().orElse(1);
+        double rangeX = maxX - minX;
+        if (rangeX < 0.001) rangeX = 1;
+
+        List<SvgSparkLine.DataPoint> normalized = new ArrayList<>(data.size());
+        for (SvgSparkLine.DataPoint dp : data) {
+            double normX = (dp.x() - minX) / rangeX;
+            normalized.add(new SvgSparkLine.DataPoint(normX, dp.y()));
+        }
+
+        // Now apply moving average on normalized data
+        double dataMinX = 0;
+        double dataMaxX = 1;
+        double dataRange = 1.0;
+
+        int numBuckets = Math.max(3, (int) (TARGET_POINTS * dataRange));
+        double bucketWidth = dataRange / numBuckets;
+
+        List<SvgSparkLine.DataPoint> result = new ArrayList<>(numBuckets);
+
+        for (int i = 0; i < numBuckets; i++) {
+            double bucketStart = dataMinX + i * bucketWidth;
+            double bucketEnd = dataMinX + (i + 1) * bucketWidth;
+            double bucketCenter = (bucketStart + bucketEnd) / 2;
+
+            double sum = 0;
+            int count = 0;
+            for (SvgSparkLine.DataPoint dp : normalized) {
+                if (dp.x() >= bucketStart && dp.x() < bucketEnd) {
+                    sum += dp.y();
+                    count++;
+                }
+            }
+
+            if (count > 0) {
+                result.add(new SvgSparkLine.DataPoint(bucketCenter, sum / count));
+            }
+        }
+
+        return result;
+    }
+
+    /**
+     * Simulates the RDP (Ramer-Douglas-Peucker) algorithm from SvgSparkLine.
+     * First normalizes x values to 0-1 range, then applies RDP.
+     */
+    private List<SvgSparkLine.DataPoint> applyRdp(List<SvgSparkLine.DataPoint> data) {
+        if (data.size() < 3) {
+            return data;
+        }
+
+        // Normalize x values to 0-1 range (like SvgSparkLine.normalizeDataPoints does)
+        double minX = data.stream().mapToDouble(SvgSparkLine.DataPoint::x).min().orElse(0);
+        double maxX = data.stream().mapToDouble(SvgSparkLine.DataPoint::x).max().orElse(1);
+        double rangeX = maxX - minX;
+        if (rangeX < 0.001) rangeX = 1;
+
+        // Also normalize y values for epsilon calculation
+        double minY = data.stream().mapToDouble(SvgSparkLine.DataPoint::y).min().orElse(0);
+        double maxY = data.stream().mapToDouble(SvgSparkLine.DataPoint::y).max().orElse(1);
+        double rangeY = maxY - minY;
+        if (rangeY < 0.001) rangeY = 1;
+
+        List<double[]> normalized = new ArrayList<>(data.size());
+        for (SvgSparkLine.DataPoint dp : data) {
+            double normX = (dp.x() - minX) / rangeX;
+            double normY = (dp.y() - minY) / rangeY;
+            normalized.add(new double[]{normX, normY});
+        }
+
+        // Apply RDP with typical epsilon (viewBoxWidth=1000, rdpEpsilon=10)
+        double epsilon = 10.0 / 1000.0;  // normalizedEpsilon
+        List<double[]> reduced = ramerDouglasPeucker(normalized, epsilon);
+
+        // Convert back to DataPoints with original y values
+        List<SvgSparkLine.DataPoint> result = new ArrayList<>(reduced.size());
+        for (double[] pt : reduced) {
+            double originalY = pt[1] * rangeY + minY;
+            result.add(new SvgSparkLine.DataPoint(pt[0], originalY));
+        }
+
+        return result;
+    }
+
+    private List<double[]> ramerDouglasPeucker(List<double[]> points, double epsilon) {
+        if (points.size() < 3) {
+            return new ArrayList<>(points);
+        }
+
+        double maxDist = 0;
+        int maxIndex = 0;
+        double[] first = points.get(0);
+        double[] last = points.get(points.size() - 1);
+
+        for (int i = 1; i < points.size() - 1; i++) {
+            double dist = perpendicularDistance(points.get(i), first, last);
+            if (dist > maxDist) {
+                maxDist = dist;
+                maxIndex = i;
+            }
+        }
+
+        if (maxDist > epsilon) {
+            List<double[]> left = ramerDouglasPeucker(points.subList(0, maxIndex + 1), epsilon);
+            List<double[]> right = ramerDouglasPeucker(points.subList(maxIndex, points.size()), epsilon);
+
+            List<double[]> result = new ArrayList<>(left.subList(0, left.size() - 1));
+            result.addAll(right);
+            return result;
+        } else {
+            List<double[]> result = new ArrayList<>(2);
+            result.add(first);
+            result.add(last);
+            return result;
+        }
+    }
+
+    private double perpendicularDistance(double[] point, double[] lineStart, double[] lineEnd) {
+        double dx = lineEnd[0] - lineStart[0];
+        double dy = lineEnd[1] - lineStart[1];
+
+        double lineLengthSquared = dx * dx + dy * dy;
+        if (lineLengthSquared == 0) {
+            dx = point[0] - lineStart[0];
+            dy = point[1] - lineStart[1];
+            return Math.sqrt(dx * dx + dy * dy);
+        }
+
+        double area2 = Math.abs(
+                (lineEnd[0] - lineStart[0]) * (lineStart[1] - point[1]) -
+                (lineStart[0] - point[0]) * (lineEnd[1] - lineStart[1])
+        );
+
+        return area2 / Math.sqrt(lineLengthSquared);
     }
 
     private int measureSerializedSize(Object obj) throws IOException {

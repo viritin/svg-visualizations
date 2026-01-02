@@ -380,11 +380,12 @@ public class RealWeatherDataTestUI extends VerticalLayout {
                     DATE_FORMAT.format(data.getLast().getInstant())
             );
             setCrosshairListener(pos -> {
-                int idx = getIndexAt(pos);
-                double val = getValueAt(pos);
-                RawWeatherStationData record = data.get(Math.min(idx, data.size() - 1));
-                interactionInfo.setText("Temperature: %.1f°C at %s (index %d of %d)".formatted(
-                        val, DATE_FORMAT.format(record.getInstant()), idx, data.size()));
+                // pos is relative position 0.0-1.0, use it to find closest original record
+                int idx = (int) (pos * (data.size() - 1));
+                idx = Math.max(0, Math.min(idx, data.size() - 1));
+                RawWeatherStationData record = data.get(idx);
+                interactionInfo.setText("Temperature: %.1f°C at %s (record %d of %d)".formatted(
+                        record.getTempfC(), DATE_FORMAT.format(record.getInstant()), idx + 1, data.size()));
             });
         }};
         tempChart.setId("temp-sparkline");
@@ -450,11 +451,11 @@ public class RealWeatherDataTestUI extends VerticalLayout {
                     DATE_FORMAT.format(data.getLast().getInstant())
             );
             setCrosshairListener(pos -> {
-                int idx = getIndexAt(pos);
-                double val = getValueAt(pos);
-                RawWeatherStationData record = data.get(Math.min(idx, data.size() - 1));
-                interactionInfo.setText("Pressure: %.1f hPa at %s (index %d of %d)".formatted(
-                        val, DATE_FORMAT.format(record.getInstant()), idx, data.size()));
+                int idx = (int) (pos * (data.size() - 1));
+                idx = Math.max(0, Math.min(idx, data.size() - 1));
+                RawWeatherStationData record = data.get(idx);
+                interactionInfo.setText("Pressure: %.1f hPa at %s (record %d of %d)".formatted(
+                        record.getBaromRelHpa(), DATE_FORMAT.format(record.getInstant()), idx + 1, data.size()));
             });
         }};
         pressureChart.setId("pressure-sparkline");
@@ -484,11 +485,11 @@ public class RealWeatherDataTestUI extends VerticalLayout {
                     DATE_FORMAT.format(data.getLast().getInstant())
             );
             setCrosshairListener(pos -> {
-                int idx = getIndexAt(pos);
-                double val = getValueAt(pos);
-                RawWeatherStationData record = data.get(Math.min(idx, data.size() - 1));
-                interactionInfo.setText("Solar: %.1f W/m² at %s (index %d of %d)".formatted(
-                        val, DATE_FORMAT.format(record.getInstant()), idx, data.size()));
+                int idx = (int) (pos * (data.size() - 1));
+                idx = Math.max(0, Math.min(idx, data.size() - 1));
+                RawWeatherStationData record = data.get(idx);
+                interactionInfo.setText("Solar: %.1f W/m² at %s (record %d of %d)".formatted(
+                        record.getSolarradiation(), DATE_FORMAT.format(record.getInstant()), idx + 1, data.size()));
             });
         }};
         solarChart.setId("solar-sparkline");
@@ -521,11 +522,11 @@ public class RealWeatherDataTestUI extends VerticalLayout {
                     DATE_FORMAT.format(data.getLast().getInstant())
             );
             setCrosshairListener(pos -> {
-                int idx = getIndexAt(pos);
-                double val = getValueAt(pos);
-                RawWeatherStationData record = validData.get(Math.min(idx, validData.size() - 1));
-                interactionInfo.setText("Humidity: %.0f%% at %s (index %d of %d)".formatted(
-                        val, DATE_FORMAT.format(record.getInstant()), idx, validData.size()));
+                int idx = (int) (pos * (validData.size() - 1));
+                idx = Math.max(0, Math.min(idx, validData.size() - 1));
+                RawWeatherStationData record = validData.get(idx);
+                interactionInfo.setText("Humidity: %d%% at %s (record %d of %d)".formatted(
+                        record.getHumidity(), DATE_FORMAT.format(record.getInstant()), idx + 1, validData.size()));
             });
         }};
         humidityChart.setId("humidity-sparkline");
@@ -555,11 +556,11 @@ public class RealWeatherDataTestUI extends VerticalLayout {
                     DATE_FORMAT.format(data.getLast().getInstant())
             );
             setCrosshairListener(pos -> {
-                int idx = getIndexAt(pos);
-                double val = getValueAt(pos);
-                RawWeatherStationData record = data.get(Math.min(idx, data.size() - 1));
-                interactionInfo.setText("Wind: %.1f m/s at %s (index %d of %d)".formatted(
-                        val, DATE_FORMAT.format(record.getInstant()), idx, data.size()));
+                int idx = (int) (pos * (data.size() - 1));
+                idx = Math.max(0, Math.min(idx, data.size() - 1));
+                RawWeatherStationData record = data.get(idx);
+                interactionInfo.setText("Wind: %.1f m/s at %s (record %d of %d)".formatted(
+                        record.getWindSpeedMs(), DATE_FORMAT.format(record.getInstant()), idx + 1, data.size()));
             });
         }};
         windChart.setId("wind-sparkline");

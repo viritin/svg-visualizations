@@ -82,14 +82,16 @@ public class SvgSparkLineTestUI extends VerticalLayout {
         Div container = new Div();
         container.add(new Paragraph("Interactive with Crosshair"));
 
+        double[] data = generateSineWave(200);
         SvgSparkLine sparkLine = new SvgSparkLine(500, 100) {{
             setLineColor(NamedColor.DARKORANGE);
-            double[] data = generateSineWave(200);
             setData(data);
             setTitle("Hover/Click to See Values");
             setCrosshairListener(relPos -> {
-                double value = getValueAt(relPos);
-                int index = getIndexAt(relPos);
+                // Use relative position to find index in original data
+                int index = (int) (relPos * (data.length - 1));
+                index = Math.max(0, Math.min(index, data.length - 1));
+                double value = data[index];
                 crosshairInfo.setText(String.format(
                         "Position: %.1f%%, Index: %d, Value: %.2f",
                         relPos * 100, index, value
