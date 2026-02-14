@@ -30,7 +30,7 @@ public class SvgVisualizationsIT {
     public void setup() {
         browser = playwright.chromium()
                 .launch(new BrowserType.LaunchOptions()
-                        .setHeadless(false)
+                        .setHeadless(true)
                         .setDevtools(true)
                 );
 

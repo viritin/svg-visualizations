@@ -7,10 +7,12 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
+import org.junit.jupiter.api.condition.DisabledIf;
 import org.vaadin.svgvis.testdata.RawWeatherStationData;
 import org.vaadin.svgvis.testdata.WeatherData;
 
@@ -277,9 +279,12 @@ public class RenderingPerformanceTest {
     /**
      * Validates that key performance metrics are within acceptable tolerance.
      * This test runs last and fails if any metric regressed significantly.
+     * 
+     * Can be skipped by setting system property: -DskipPerformanceValidation=true
      */
     @Test
     @Order(100)
+    @DisabledIf("skipPerformanceValidation")
     void validatePerformanceNotRegressed() {
         System.out.println("\n=== Performance Regression Validation ===\n");
         System.out.println("Checking key metrics against baseline (tolerance: " + (int)(TOLERANCE * 100) + "%)...\n");
@@ -444,5 +449,16 @@ public class RenderingPerformanceTest {
         } else {
             return String.format("%.2f s", nanos / 1_000_000_000.0);
         }
+    }
+
+    /**
+     * Method used by @DisabledIf annotation to determine if performance validation should be skipped.
+     * Returns true if system property "skipPerformanceValidation" is set to "true".
+     * 
+     * @return true if performance validation should be skipped, false otherwise
+     */
+    static boolean skipPerformanceValidation() {
+        String skipProperty = System.getProperty("skipPerformanceValidation");
+        return skipProperty != null && skipProperty.equalsIgnoreCase("true");
     }
 }

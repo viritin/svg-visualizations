@@ -6,6 +6,24 @@ Lightweight, high-performance SVG visualization components for Vaadin 25+.
 
 This project serves as a testing ground for the new SVG namespace support in Vaadin 25 and the SVG-specific elements in [Viritin 3.1](https://github.com/viritin/viritin). The components are actively used in a real-world weather monitoring application, handling datasets with nearly 1 million data points.
 
+## Performance Testing
+
+The project includes comprehensive performance tests that measure rendering times for different dataset sizes and smoothing algorithms. These tests help ensure that performance doesn't regress over time.
+
+### Running Performance Tests
+
+To run all performance tests including validation:
+```bash
+mvn test -Dtest=RenderingPerformanceTest
+```
+
+To skip the performance regression validation (useful for CI/CD or when you want to run measurements without validation):
+```bash
+mvn test -Dtest=RenderingPerformanceTest -DskipPerformanceValidation=true
+```
+
+The `skipPerformanceValidation` system property disables the final validation test that checks if performance metrics are within acceptable tolerance levels.
+
 ## Components
 
 ### SvgSparkLine
