@@ -21,7 +21,8 @@
     </developers>
     <properties>
         <!-- The version used while developing/testing, update every once in a while -->
-        <vaadin.version>25.0.2</vaadin.version>
+        <vaadin.version>25.1.1</vaadin.version>
+        <spring.boot.version>4.0.4</spring.boot.version>
         <github.account>viritin</github.account>
         <github.project>svg-visualizations</github.project>
     </properties>
@@ -47,7 +48,7 @@
             <!-- Utilizes the optimized Element API for SVG namespace -->
             <groupId>in.virit</groupId>
             <artifactId>viritin</artifactId>
-            <version>3.1.1</version>
+            <version>3.3.1</version>
         </dependency>
         <dependency>
             <groupId>com.vaadin</groupId>
