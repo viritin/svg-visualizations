@@ -82,6 +82,21 @@ public class SvgSparkLineTest {
     }
 
     @Test
+    public void testReferenceLineRecord() {
+        SvgSparkLine.ReferenceLine explicit = new SvgSparkLine.ReferenceLine(110, NamedColor.RED, "target 110");
+        assertEquals(110, explicit.value(), 0.001);
+        assertEquals(NamedColor.RED, explicit.color());
+        assertEquals("target 110", explicit.label());
+
+        // null color signals the faint default color is used at draw time;
+        // null label means no text is drawn
+        SvgSparkLine.ReferenceLine faintDefault = new SvgSparkLine.ReferenceLine(50, null, null);
+        assertEquals(50, faintDefault.value(), 0.001);
+        assertNull(faintDefault.color());
+        assertNull(faintDefault.label());
+    }
+
+    @Test
     public void testDataPointListCreation() {
         List<DataPoint> points = Arrays.asList(
                 DataPoint.of(0, 100),

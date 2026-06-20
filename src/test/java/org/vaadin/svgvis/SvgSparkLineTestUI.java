@@ -27,6 +27,7 @@ public class SvgSparkLineTestUI extends VerticalLayout {
         add(createMultiSeriesSparkLine());
         add(createInteractiveSparkLine());
         add(createNoSmoothingSparkLine());
+        add(createReferenceLineSparkLine());
         add(createFluidWidthSparkLine());
 
         add(crosshairInfo);
@@ -117,6 +118,25 @@ public class SvgSparkLineTestUI extends VerticalLayout {
         }};
 
         sparkLine.setId("no-smoothing-sparkline");
+        container.add(sparkLine);
+        return container;
+    }
+
+    private Div createReferenceLineSparkLine() {
+        Div container = new Div();
+        container.add(new Paragraph("Reference Lines (faint default + explicit color)"));
+
+        SvgSparkLine sparkLine = new SvgSparkLine(400, 80) {{
+            setLineColor(NamedColor.STEELBLUE);
+            setData(generateSineWave(80));
+            setTitle("Chamber temp");
+            // Faint default color (line color at 0.5 opacity) with a label
+            addReferenceLine(50, "avg 50");
+            // Reference line with an explicit color (target out of data range)
+            addReferenceLine(110, NamedColor.RED);
+        }};
+
+        sparkLine.setId("reference-line-sparkline");
         container.add(sparkLine);
         return container;
     }

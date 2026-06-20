@@ -31,6 +31,12 @@ public class SvgSparkLine extends VSvg {
     private Double fixedXMax = null;
     private Color lineColor = NamedColor.BLACK;
     private List<DataSeries> additionalSeries = new ArrayList<>();
+    private final List<ReferenceLine> referenceLines = new ArrayList<>();
+
+    /**
+     * Opacity used for the faint default color of reference lines.
+     */
+    private static final double REFERENCE_LINE_OPACITY = 0.5;
 
     /**
      * Represents a data point with x position and y value.
@@ -62,6 +68,14 @@ public class SvgSparkLine extends VSvg {
      * Represents an additional data series with its own color.
      */
     public record DataSeries(List<DataPoint> data, Color color) implements java.io.Serializable {}
+
+    /**
+     * A fixed horizontal reference line at a given y value (e.g. a target temperature).
+     * A {@code null} color means the line is rendered with the faint default color
+     * (the current line color at {@link #REFERENCE_LINE_OPACITY} opacity). A {@code null}
+     * label means no text is drawn next to the line.
+     */
+    public record ReferenceLine(double value, Color color, String label) implements java.io.Serializable {}
 
     private String title;
     private String timeScaleStart;
@@ -204,6 +218,66 @@ public class SvgSparkLine extends VSvg {
             points.add(new DataPoint(i, values[i]));
         }
         additionalSeries.add(new DataSeries(normalizeDataPoints(points), color));
+    }
+
+    /**
+     * Adds a fixed horizontal reference line at the given y value (e.g. a target
+     * temperature) using the faint default color: the current line color at
+     * {@value #REFERENCE_LINE_OPACITY} opacity. The reference line expands the
+     * y-axis scale when needed so that it is always visible.
+     * <p>
+     * Reference lines are persistent configuration and are not cleared by
+     * {@link #draw()} (unlike data series). Use {@link #clearReferenceLines()}
+     * to remove them.
+     *
+     * @param value the y value where the line is drawn
+     */
+    public void addReferenceLine(double value) {
+        referenceLines.add(new ReferenceLine(value, null, null));
+    }
+
+    /**
+     * Adds a fixed horizontal reference line at the given y value using the faint
+     * default color, with a text label (e.g. a target reading) drawn at the right
+     * edge next to the line.
+     *
+     * @param value the y value where the line is drawn
+     * @param label the text drawn next to the line, or {@code null} for none
+     */
+    public void addReferenceLine(double value, String label) {
+        referenceLines.add(new ReferenceLine(value, null, label));
+    }
+
+    /**
+     * Adds a fixed horizontal reference line at the given y value with an explicit
+     * color. The reference line expands the y-axis scale when needed so that it is
+     * always visible.
+     *
+     * @param value the y value where the line is drawn
+     * @param color the stroke color of the line
+     */
+    public void addReferenceLine(double value, Color color) {
+        referenceLines.add(new ReferenceLine(value, color, null));
+    }
+
+    /**
+     * Adds a fixed horizontal reference line at the given y value with an explicit
+     * color and a text label (e.g. a target reading) drawn at the right edge next
+     * to the line.
+     *
+     * @param value the y value where the line is drawn
+     * @param color the stroke color of the line and label
+     * @param label the text drawn next to the line, or {@code null} for none
+     */
+    public void addReferenceLine(double value, Color color, String label) {
+        referenceLines.add(new ReferenceLine(value, color, label));
+    }
+
+    /**
+     * Removes all reference lines.
+     */
+    public void clearReferenceLines() {
+        referenceLines.clear();
     }
 
     public void setLineColor(Color lineColor) {
@@ -433,6 +507,21 @@ public class SvgSparkLine extends VSvg {
             }
         }
 
+        // Expand the y-axis scale to keep reference lines visible
+        for (ReferenceLine ref : referenceLines) {
+            if (ref.value() < min) min = ref.value();
+            if (ref.value() > max) max = ref.value();
+        }
+
+        // Add a small padding when everything coincides on a single y value
+        // (e.g. perfectly flat data and a reference line at the same value),
+        // avoiding a division by zero below and centering the flat line.
+        if (max - min < 1e-9) {
+            double padding = max == 0 ? 1.0 : Math.abs(max) * 0.05;
+            min -= padding;
+            max += padding;
+        }
+
         double minY = height + fontSize;
         double maxY = fontSize;
 
@@ -462,6 +551,29 @@ public class SvgSparkLine extends VSvg {
 
         // Draw primary series
         getElement().appendChild(createLineFromSmoothed(dataPoints, lineColor, min, max));
+
+        // Draw reference lines on top of the data, with a faint default color
+        for (ReferenceLine ref : referenceLines) {
+            Color refColor = ref.color() != null ? ref.color() : faint(lineColor);
+            double y = height - (ref.value() - finalMin) / (finalMax - finalMin) * height + fontSize;
+            LineElement refLine = new LineElement()
+                    .from(0, round(y))
+                    .to(viewBoxWidth, round(y))
+                    .stroke(refColor)
+                    .strokeWidth(1)
+                    .strokeDasharray(4, 2);
+            getElement().appendChild(refLine);
+
+            if (ref.label() != null) {
+                // Keep the label fully opaque (only the line itself is faint)
+                Color labelColor = ref.color() != null ? ref.color() : lineColor;
+                TextElement refLabel = new TextElement(viewBoxWidth, round(y - 2), ref.label())
+                        .fontSize(fontSize)
+                        .textAnchor(TextElement.TextAnchor.END)
+                        .fill(labelColor);
+                getElement().appendChild(refLabel);
+            }
+        }
 
         // Labels
         TextElement minLabel = new TextElement(0, minY - 2, String.format("%.1f", min))
@@ -550,6 +662,14 @@ public class SvgSparkLine extends VSvg {
 
     private static double round(double value) {
         return Math.round(value * 10) / 10.0;
+    }
+
+    /**
+     * Returns a faint version of the given color (same RGB at
+     * {@value #REFERENCE_LINE_OPACITY} opacity).
+     */
+    private static Color faint(Color color) {
+        return color.toRgbColor().withAlpha(REFERENCE_LINE_OPACITY);
     }
 
     private PathElement createBezierPath(List<double[]> points, Color color) {
