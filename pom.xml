@@ -48,7 +48,7 @@
             <!-- Utilizes the optimized Element API for SVG namespace -->
             <groupId>in.virit</groupId>
             <artifactId>viritin</artifactId>
-            <version>3.3.1</version>
+            <version>3.5.0</version>
         </dependency>
         <dependency>
             <groupId>com.vaadin</groupId>
