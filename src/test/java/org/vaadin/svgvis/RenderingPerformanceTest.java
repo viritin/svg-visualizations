@@ -1,7 +1,8 @@
 package org.vaadin.svgvis;
 
-import com.github.mvysny.kaributesting.v10.MockVaadin;
+import com.vaadin.browserless.BrowserlessApplicationContext;
 import com.vaadin.flow.component.UI;
+import com.vaadin.flow.component.orderedlayout.VerticalLayout;
 import in.virit.color.NamedColor;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
@@ -41,6 +42,7 @@ public class RenderingPerformanceTest {
     private static final double TOLERANCE = 1.0;
 
     private static PerformanceBaseline baseline;
+    private BrowserlessApplicationContext app;
 
     @BeforeAll
     static void loadData() {
@@ -62,12 +64,14 @@ public class RenderingPerformanceTest {
 
     @BeforeEach
     void setupVaadin() {
-        MockVaadin.setup();
+        app = BrowserlessApplicationContext.forComponent(() -> new VerticalLayout());
+        var user = app.newUser();
+        var window = user.newWindow();
     }
 
     @AfterEach
     void tearDownVaadin() {
-        MockVaadin.tearDown();
+        app.close();
     }
 
     @Test
