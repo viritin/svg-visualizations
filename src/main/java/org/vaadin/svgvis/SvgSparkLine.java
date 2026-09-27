@@ -7,6 +7,7 @@ import org.vaadin.firitin.components.VSvg;
 import org.vaadin.firitin.element.svg.LineElement;
 import org.vaadin.firitin.element.svg.PathElement;
 import org.vaadin.firitin.element.svg.SvgGraphicsElement;
+import org.vaadin.firitin.element.svg.TSpanElement;
 import org.vaadin.firitin.element.svg.TextElement;
 
 import java.time.Instant;
@@ -28,10 +29,12 @@ import java.util.function.Consumer;
  * page CSS: {@code sparkline-line} (the primary series), {@code sparkline-series}
  * (additional series), {@code sparkline-grid}, {@code sparkline-reference},
  * {@code sparkline-gap} (the dashed bridge over a gap in the data, see
- * {@link #setShowGaps(boolean)}),
- * {@code sparkline-label} (with {@code sparkline-line-label} or
- * {@code sparkline-series-label} on the scale labels), {@code sparkline-title}
- * and {@code sparkline-crosshair}.
+ * {@link #setShowGaps(boolean)}), {@code sparkline-label} (with
+ * {@code sparkline-line-label} or {@code sparkline-series-label} on the scale
+ * labels), {@code sparkline-title} and {@code sparkline-crosshair}. Additional
+ * series and their scale labels are also numbered in the order they were added,
+ * from 2 as the primary series is the first ({@code sparkline-series-2},
+ * {@code sparkline-series-label-2}, ...), so page CSS can colour each.
  */
 public class SvgSparkLine extends VSvg {
     private final int height;
@@ -268,8 +271,8 @@ public class SvgSparkLine extends VSvg {
      * Adds a series drawn against a scale of its own, for a second quantity in
      * other units, e.g. air pressure next to humidity. Its min and max are
      * labelled at the right edge, in the series' colour and with its unit, while
-     * the primary series' scale stays at the left. Only the first such series
-     * gets labels.
+     * the primary series' scale stays at the left. Several such series share the
+     * right edge, their labels side by side in the order they were added.
      *
      * @param data  the points, with the same kind of x as the primary series
      * @param color the colour of the line and its labels, or null for currentColor
@@ -710,19 +713,19 @@ public class SvgSparkLine extends VSvg {
         // Draw additional series first (so primary is on top)
         final double finalMin = min;
         final double finalMax = max;
-        DataSeries secondScale = null;
-        double[] secondRange = null;
+        List<OwnScale> ownScales = new ArrayList<>();
         for (int i = 0; i < additionalSeries.size(); i++) {
             DataSeries series = additionalSeries.get(i);
+            // Numbered from 2, the primary series being the first, for page CSS to tell them apart
+            String numbered = "sparkline-series-" + (i + 2);
             if (series.ownScale()) {
                 double[] range = range(series.data());
-                appendLine(series.data(), seriesGaps.get(i), series.color(), range[0], range[1], "sparkline-series");
-                if (secondScale == null) {
-                    secondScale = series;
-                    secondRange = range;
-                }
+                appendLine(series.data(), seriesGaps.get(i), series.color(), range[0], range[1],
+                        "sparkline-series", numbered);
+                ownScales.add(new OwnScale(series, range, i + 2));
             } else {
-                appendLine(series.data(), seriesGaps.get(i), series.color(), finalMin, finalMax, "sparkline-series");
+                appendLine(series.data(), seriesGaps.get(i), series.color(), finalMin, finalMax,
+                        "sparkline-series", numbered);
             }
         }
 
@@ -758,14 +761,11 @@ public class SvgSparkLine extends VSvg {
         // Labels
         // Locale.ROOT: the JVM's default locale is the server's, not the viewer's
         appendScaleLabels(0, TextElement.TextAnchor.START, min, max, unit, lineColor, "sparkline-line-label");
-        if (secondScale != null) {
-            appendScaleLabels(viewBoxWidth, TextElement.TextAnchor.END, secondRange[0], secondRange[1],
-                    secondScale.unit(), secondScale.color(), "sparkline-series-label");
-        }
+        appendOwnScaleLabels(ownScales);
 
         if (title != null) {
             // With a second scale at the right, the title moves to the middle
-            boolean centred = secondScale != null;
+            boolean centred = !ownScales.isEmpty();
             TextElement titleLabel = filled(new TextElement(centred ? viewBoxWidth / 2.0 : viewBoxWidth, fontSize - 2.5, title)
                     .fontSize(fontSize)
                     .fontWeight(TextElement.FontWeight.BOLD)
@@ -838,6 +838,41 @@ public class SvgSparkLine extends VSvg {
         return SparkLineGeometry.gaps(xs);
     }
 
+    private record OwnScale(DataSeries series, double[] range, int number) {
+    }
+
+    /**
+     * The scales of the series with their own, at the right edge: one text per
+     * row, a span per series in its colour, so the browser lays them side by
+     * side however wide each number is.
+     */
+    private void appendOwnScaleLabels(List<OwnScale> scales) {
+        if (scales.isEmpty()) {
+            return;
+        }
+        double[] rows = {height + 2 * fontSize - 2, fontSize - 2};
+        for (int row = 0; row < rows.length; row++) {
+            TextElement text = axisLabel(new TextElement(viewBoxWidth, rows[row], "")
+                    .fontSize(fontSize)
+                    .fontWeight(TextElement.FontWeight.BOLD)
+                    .textAnchor(TextElement.TextAnchor.END));
+            for (int i = 0; i < scales.size(); i++) {
+                OwnScale scale = scales.get(i);
+                String unit = scale.series().unit() != null ? scale.series().unit() : "";
+                // Locale.ROOT: the JVM's default locale is the server's, not the viewer's
+                TSpanElement span = filled(new TSpanElement(
+                        String.format(Locale.ROOT, "%.1f", scale.range()[row == 0 ? 0 : 1]) + unit), scale.series().color());
+                if (i > 0) {
+                    span.dx(fontSize);
+                }
+                span.getClassList().add("sparkline-series-label");
+                span.getClassList().add("sparkline-series-label-" + scale.number());
+                text.appendChild(span);
+            }
+            getElement().appendChild(text);
+        }
+    }
+
     /** Min and max of a series, padded when it is flat so that it can be scaled. */
     private static double[] range(List<DataPoint> data) {
         double min = Double.POSITIVE_INFINITY;
@@ -864,7 +899,7 @@ public class SvgSparkLine extends VSvg {
      * but the eye can still follow the series.
      */
     private void appendLine(List<DataPoint> seriesData, List<double[]> gaps, Color color, double min, double max,
-                            String className) {
+                            String... classNames) {
         List<double[]> points = new ArrayList<>(seriesData.size());
         for (DataPoint dp : seriesData) {
             double x = dp.x() * viewBoxWidth;
@@ -896,7 +931,9 @@ public class SvgSparkLine extends VSvg {
                 }
             }
         }
-        line.getClassList().add(className);
+        for (String className : classNames) {
+            line.getClassList().add(className);
+        }
         getElement().appendChild(line);
 
         if (runs.size() > 1) {

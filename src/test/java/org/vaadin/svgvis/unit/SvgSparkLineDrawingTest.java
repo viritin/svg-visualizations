@@ -121,7 +121,7 @@ public class SvgSparkLineDrawingTest extends BrowserlessTest {
         chart.draw();
 
         List<String> left = labels(chart, "sparkline-line-label");
-        List<String> right = labels(chart, "sparkline-series-label");
+        List<String> right = spans(chart, "sparkline-series-label");
         assertEquals(List.of("40.0 % RH", "50.0 % RH"), left, "the primary scale, not stretched by the pressure");
         assertEquals(List.of("1009.8 hPa", "1011.4 hPa"), right);
     }
@@ -143,6 +143,31 @@ public class SvgSparkLineDrawingTest extends BrowserlessTest {
         withGaps.setData(gappy);
         withGaps.draw();
         assertTrue(part(withGaps, "sparkline-gap").isPresent());
+    }
+
+    /** Four lines in one chart: every own scale gets its numbers, side by side at the right. */
+    @Test
+    public void everySeriesWithItsOwnScaleIsLabelled() {
+        SvgSparkLine chart = new SvgSparkLine(100);
+        chart.setData(40, 50);
+        chart.addSeriesWithOwnScale(List.of(SvgSparkLine.DataPoint.of(0, 1000), SvgSparkLine.DataPoint.of(1, 1010)), null, " hPa");
+        chart.addSeriesWithOwnScale(List.of(SvgSparkLine.DataPoint.of(0, 2.9), SvgSparkLine.DataPoint.of(1, 3.1)), null, " V");
+        chart.addSeriesWithOwnScale(List.of(SvgSparkLine.DataPoint.of(0, -60), SvgSparkLine.DataPoint.of(1, -40)), null, " dBm");
+        chart.draw();
+
+        assertEquals(List.of("1000.0 hPa", "2.9 V", "-60.0 dBm", "1010.0 hPa", "3.1 V", "-40.0 dBm"),
+                spans(chart, "sparkline-series-label"), "the bottom row, then the top row");
+        assertEquals(List.of("3.1 V"), spans(chart, "sparkline-series-label-3").subList(1, 2),
+                "each series' labels are numbered like its line");
+        assertTrue(part(chart, "sparkline-series-4").isPresent());
+    }
+
+    /** The texts of the spans with the class, row by row. */
+    private static List<String> spans(SvgSparkLine chart, String className) {
+        return chart.getElement().getChildren()
+                .flatMap(Element::getChildren)
+                .filter(e -> e.getClassList().contains(className))
+                .map(Element::getText).toList();
     }
 
     private static List<String> labels(SvgSparkLine chart, String className) {
