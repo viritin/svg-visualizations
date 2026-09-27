@@ -1,0 +1,112 @@
+package org.vaadin.svgvis.unit;
+
+import com.vaadin.browserless.BrowserlessTest;
+import com.vaadin.browserless.internal.MockVaadin;
+import com.vaadin.flow.component.UI;
+import com.vaadin.flow.dom.Element;
+import org.junit.jupiter.api.Test;
+import org.vaadin.svgvis.SvgSparkLine;
+
+import java.util.List;
+import java.util.Locale;
+import java.util.Optional;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+/**
+ * What draw() produces, and when the chart draws itself. Colours are set as
+ * write-only attributes that only the browser sees, so they are checked in the
+ * browser; the rest is visible here.
+ */
+public class SvgSparkLineDrawingTest extends BrowserlessTest {
+
+    private UI ui() {
+        return UI.getCurrent();
+    }
+
+    /** A round trip, which runs what Vaadin runs just before a response. */
+    private void respond() {
+        MockVaadin.clientRoundtrip();
+    }
+
+    private static Optional<Element> part(SvgSparkLine chart, String className) {
+        return chart.getElement().getChildren()
+                .filter(e -> e.getClassList().contains(className)).findFirst();
+    }
+
+    @Test
+    public void thePartsAreNamedAndTheGridIsFaint() {
+        SvgSparkLine chart = new SvgSparkLine(100);
+        chart.setData(1, 3, 2);
+        chart.setTitle("Temperature");
+        chart.draw();
+
+        Element line = part(chart, "sparkline-line").orElseThrow();
+        assertEquals("non-scaling-stroke", line.getAttribute("vector-effect"));
+        assertEquals("0.25", part(chart, "sparkline-grid").orElseThrow().getAttribute("stroke-opacity"));
+        assertEquals("0.7", part(chart, "sparkline-label").orElseThrow().getAttribute("fill-opacity"));
+        assertTrue(part(chart, "sparkline-title").isPresent());
+    }
+
+    @Test
+    public void theScaleIsTheSameInEveryLocale() {
+        Locale original = Locale.getDefault();
+        try {
+            Locale.setDefault(Locale.forLanguageTag("fi-FI"));
+            SvgSparkLine chart = new SvgSparkLine(100);
+            chart.setData(20.25, 21.5);
+            chart.draw();
+            List<String> labels = chart.getElement().getChildren()
+                    .filter(e -> e.getClassList().contains("sparkline-label"))
+                    .map(Element::getText).toList();
+            assertTrue(labels.contains("21.5"), labels.toString());
+        } finally {
+            Locale.setDefault(original);
+        }
+    }
+
+    @Test
+    public void changesDrawThemselvesOncePerResponse() {
+        SvgSparkLine chart = new SvgSparkLine(100);
+        ui().add(chart);
+        chart.setData(1, 3, 2);
+        chart.setTitle("Temperature");
+        assertEquals(0, chart.getElement().getChildCount(), "nothing drawn before the response");
+
+        respond();
+        assertTrue(part(chart, "sparkline-line").isPresent());
+        assertTrue(part(chart, "sparkline-title").isPresent(), "the title set after the data is in the same drawing");
+    }
+
+    /** The data is gone after drawing; redrawing for a new title would leave an empty chart. */
+    @Test
+    public void aSettingChangedAfterDrawingDoesNotWipeTheChart() {
+        SvgSparkLine chart = new SvgSparkLine(100);
+        ui().add(chart);
+        chart.setData(1, 3, 2);
+        respond();
+
+        chart.setTitle("Later");
+        respond();
+        assertTrue(part(chart, "sparkline-line").isPresent());
+
+        chart.setData(4, 5, 6);
+        respond();
+        assertTrue(part(chart, "sparkline-title").isPresent(), "the title shows with the next data");
+    }
+
+    /** Once, every attach drew again with the dropped data, wiping a chart that was moved. */
+    @Test
+    public void aChartSurvivesBeingDetachedAndAttachedAgain() {
+        SvgSparkLine chart = new SvgSparkLine(100);
+        ui().add(chart);
+        chart.setData(1, 3, 2);
+        respond();
+
+        ui().remove(chart);
+        ui().add(chart);
+        respond();
+        assertTrue(part(chart, "sparkline-line").isPresent());
+    }
+}

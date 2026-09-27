@@ -1,8 +1,8 @@
 package org.vaadin.svgvis;
 
 import com.vaadin.flow.component.AttachEvent;
+import com.vaadin.flow.component.DetachEvent;
 import in.virit.color.Color;
-import in.virit.color.NamedColor;
 import org.vaadin.firitin.components.VSvg;
 import org.vaadin.firitin.element.svg.LineElement;
 import org.vaadin.firitin.element.svg.PathElement;
@@ -13,11 +13,22 @@ import org.vaadin.firitin.element.svg.TextElement;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.function.Consumer;
 
 /**
  * A lightweight SVG-based sparkline/line chart component.
  * Supports multiple data series, smoothing algorithms, and interactive crosshair.
+ * <p>
+ * Changes are drawn by themselves before the next response to the browser, so
+ * there is no need to call {@link #draw()}. The data is dropped after drawing to
+ * save session memory, so settings changed later, such as the title, show with
+ * the next data. Without an explicit color everything
+ * is drawn in {@code currentColor}, following the page's theme, with the grid
+ * and axis labels fainter than the data. The parts carry stable class names for
+ * page CSS: {@code sparkline-line} (the primary series), {@code sparkline-series}
+ * (additional series), {@code sparkline-grid}, {@code sparkline-reference},
+ * {@code sparkline-label}, {@code sparkline-title} and {@code sparkline-crosshair}.
  */
 public class SvgSparkLine extends VSvg {
     private final int height;
@@ -29,7 +40,8 @@ public class SvgSparkLine extends VSvg {
     private List<DataPoint> dataPoints = new ArrayList<>();
     private Double fixedXMin = null;
     private Double fixedXMax = null;
-    private Color lineColor = NamedColor.BLACK;
+    /** Null draws in currentColor, i.e. whatever colour the page gives the text around it. */
+    private Color lineColor;
     private List<DataSeries> additionalSeries = new ArrayList<>();
     private final List<ReferenceLine> referenceLines = new ArrayList<>();
 
@@ -37,6 +49,14 @@ public class SvgSparkLine extends VSvg {
      * Opacity used for the faint default color of reference lines.
      */
     private static final double REFERENCE_LINE_OPACITY = 0.5;
+    private static final double GRID_OPACITY = 0.25;
+    private static final double AXIS_LABEL_OPACITY = 0.7;
+    private static final double DATA_STROKE_WIDTH = 1.5;
+
+    private boolean dirty = true;
+    private boolean drawScheduled;
+    /** The drawn data was dropped to save memory; only new data can be drawn again. */
+    private boolean dataDropped;
 
     /**
      * Represents a data point with x position and y value.
@@ -118,6 +138,8 @@ public class SvgSparkLine extends VSvg {
     public void setData(List<DataPoint> points) {
         this.dataPoints = normalizeDataPoints(points);
         this.additionalSeries = new ArrayList<>();
+        dataDropped = false;
+        changed();
     }
 
     /**
@@ -131,6 +153,8 @@ public class SvgSparkLine extends VSvg {
         }
         this.dataPoints = normalizeDataPoints(points);
         this.additionalSeries = new ArrayList<>();
+        dataDropped = false;
+        changed();
     }
 
     /**
@@ -146,6 +170,8 @@ public class SvgSparkLine extends VSvg {
         }
         this.dataPoints = normalizeDataPoints(points);
         this.additionalSeries = new ArrayList<>();
+        dataDropped = false;
+        changed();
     }
 
     /**
@@ -161,6 +187,8 @@ public class SvgSparkLine extends VSvg {
         }
         this.dataPoints = normalizeDataPoints(points);
         this.additionalSeries = new ArrayList<>();
+        dataDropped = false;
+        changed();
     }
 
     /**
@@ -207,6 +235,7 @@ public class SvgSparkLine extends VSvg {
      */
     public void addSeries(List<DataPoint> data, Color color) {
         additionalSeries.add(new DataSeries(normalizeDataPoints(data), color));
+        changed();
     }
 
     /**
@@ -218,6 +247,7 @@ public class SvgSparkLine extends VSvg {
             points.add(new DataPoint(i, values[i]));
         }
         additionalSeries.add(new DataSeries(normalizeDataPoints(points), color));
+        changed();
     }
 
     /**
@@ -234,6 +264,7 @@ public class SvgSparkLine extends VSvg {
      */
     public void addReferenceLine(double value) {
         referenceLines.add(new ReferenceLine(value, null, null));
+        changed();
     }
 
     /**
@@ -246,6 +277,7 @@ public class SvgSparkLine extends VSvg {
      */
     public void addReferenceLine(double value, String label) {
         referenceLines.add(new ReferenceLine(value, null, label));
+        changed();
     }
 
     /**
@@ -258,6 +290,7 @@ public class SvgSparkLine extends VSvg {
      */
     public void addReferenceLine(double value, Color color) {
         referenceLines.add(new ReferenceLine(value, color, null));
+        changed();
     }
 
     /**
@@ -271,6 +304,7 @@ public class SvgSparkLine extends VSvg {
      */
     public void addReferenceLine(double value, Color color, String label) {
         referenceLines.add(new ReferenceLine(value, color, label));
+        changed();
     }
 
     /**
@@ -278,10 +312,12 @@ public class SvgSparkLine extends VSvg {
      */
     public void clearReferenceLines() {
         referenceLines.clear();
+        changed();
     }
 
     public void setLineColor(Color lineColor) {
         this.lineColor = lineColor;
+        changed();
     }
 
     public Color getLineColor() {
@@ -290,6 +326,7 @@ public class SvgSparkLine extends VSvg {
 
     public void setTitle(String title) {
         this.title = title;
+        changed();
     }
 
     public String getTitle() {
@@ -298,10 +335,12 @@ public class SvgSparkLine extends VSvg {
 
     public void setSmoothing(Smoothing smoothing) {
         this.smoothing = smoothing;
+        changed();
     }
 
     public void setUseBezierCurve(boolean useBezier) {
         this.useBezierCurve = useBezier;
+        changed();
     }
 
     public boolean isUseBezierCurve() {
@@ -319,6 +358,7 @@ public class SvgSparkLine extends VSvg {
     public void setTimeScale(String start, String end) {
         this.timeScaleStart = start;
         this.timeScaleEnd = end;
+        changed();
     }
 
     /**
@@ -354,16 +394,54 @@ public class SvgSparkLine extends VSvg {
     public void setCrosshairListener(Consumer<Double> listener) {
         this.crosshairListener = listener;
         this.crosshairEnabled = listener != null;
+        changed();
+    }
+
+    /**
+     * Draws the chart before the next response to the browser, once however many
+     * changes come before it. Detached, it is drawn when attached.
+     */
+    private void changed() {
+        dirty = true;
+        if (!drawScheduled) {
+            getUI().ifPresent(ui -> {
+                drawScheduled = true;
+                ui.beforeClientResponse(this, context -> {
+                    drawScheduled = false;
+                    drawIfPossible();
+                });
+            });
+        }
+    }
+
+    /**
+     * Draws pending changes, unless the data they would be drawn with is gone:
+     * a setting changed after drawing (a title, say) would otherwise wipe the
+     * chart. Such a change shows with the next data.
+     */
+    private void drawIfPossible() {
+        if (dirty && !dataDropped) {
+            draw();
+        }
     }
 
     @Override
     protected void onAttach(AttachEvent attachEvent) {
         super.onAttach(attachEvent);
-        draw();
+        // The drawn elements survive a detach; the data does not (draw() drops it),
+        // so drawing again on every attach wiped a chart that was moved or re-shown
+        drawIfPossible();
         if (crosshairEnabled) {
             setupCrosshairEvents();
         }
         setupTextScaling();
+    }
+
+    @Override
+    protected void onDetach(DetachEvent detachEvent) {
+        super.onDetach(detachEvent);
+        // A draw scheduled for a response that no longer includes this chart never runs
+        drawScheduled = false;
     }
 
     private void setupTextScaling() {
@@ -468,7 +546,13 @@ public class SvgSparkLine extends VSvg {
           .addEventData("element.clientWidth");
     }
 
+    /**
+     * Draws the chart now. Rarely needed, as changes are drawn by themselves
+     * before the next response; after drawing, the data is dropped to save
+     * session memory.
+     */
     public void draw() {
+        dirty = false;
         getElement().removeAllChildren();
 
         if (dataPoints.isEmpty()) return;
@@ -525,19 +609,17 @@ public class SvgSparkLine extends VSvg {
         double minY = height + fontSize;
         double maxY = fontSize;
 
-        LineElement minLine = new LineElement()
+        LineElement minLine = faint(stroked(new LineElement()
                 .from(0, minY)
-                .to(viewBoxWidth, minY)
-                .stroke(lineColor)
+                .to(viewBoxWidth, minY), lineColor)
                 .strokeWidth(1)
-                .strokeDasharray(2, 2);
+                .strokeDasharray(2, 2), GRID_OPACITY, "sparkline-grid");
 
-        LineElement maxLine = new LineElement()
+        LineElement maxLine = faint(stroked(new LineElement()
                 .from(0, maxY)
-                .to(viewBoxWidth, maxY)
-                .stroke(lineColor)
+                .to(viewBoxWidth, maxY), lineColor)
                 .strokeWidth(1)
-                .strokeDasharray(2, 2);
+                .strokeDasharray(2, 2), GRID_OPACITY, "sparkline-grid");
 
         getElement().appendChild(minLine);
         getElement().appendChild(maxLine);
@@ -546,79 +628,82 @@ public class SvgSparkLine extends VSvg {
         final double finalMin = min;
         final double finalMax = max;
         for (DataSeries series : additionalSeries) {
-            getElement().appendChild(createLineFromSmoothed(series.data(), series.color(), finalMin, finalMax));
+            SvgGraphicsElement line = createLineFromSmoothed(series.data(), series.color(), finalMin, finalMax);
+            line.getClassList().add("sparkline-series");
+            getElement().appendChild(line);
         }
 
         // Draw primary series
-        getElement().appendChild(createLineFromSmoothed(dataPoints, lineColor, min, max));
+        SvgGraphicsElement primary = createLineFromSmoothed(dataPoints, lineColor, min, max);
+        primary.getClassList().add("sparkline-line");
+        getElement().appendChild(primary);
 
         // Draw reference lines on top of the data, with a faint default color
         for (ReferenceLine ref : referenceLines) {
-            Color refColor = ref.color() != null ? ref.color() : faint(lineColor);
             double y = height - (ref.value() - finalMin) / (finalMax - finalMin) * height + fontSize;
-            LineElement refLine = new LineElement()
+            LineElement refLine = stroked(new LineElement()
                     .from(0, round(y))
-                    .to(viewBoxWidth, round(y))
-                    .stroke(refColor)
+                    .to(viewBoxWidth, round(y)), ref.color() != null ? ref.color() : lineColor)
                     .strokeWidth(1)
                     .strokeDasharray(4, 2);
+            // Only the default colour is faint; an explicit one is the caller's choice
+            if (ref.color() == null) {
+                faint(refLine, REFERENCE_LINE_OPACITY, null);
+            }
+            refLine.getClassList().add("sparkline-reference");
             getElement().appendChild(refLine);
 
             if (ref.label() != null) {
                 // Keep the label fully opaque (only the line itself is faint)
                 Color labelColor = ref.color() != null ? ref.color() : lineColor;
-                TextElement refLabel = new TextElement(viewBoxWidth, round(y - 2), ref.label())
+                TextElement refLabel = filled(new TextElement(viewBoxWidth, round(y - 2), ref.label())
                         .fontSize(fontSize)
-                        .textAnchor(TextElement.TextAnchor.END)
-                        .fill(labelColor);
+                        .textAnchor(TextElement.TextAnchor.END), labelColor);
+                refLabel.getClassList().add("sparkline-reference");
                 getElement().appendChild(refLabel);
             }
         }
 
         // Labels
-        TextElement minLabel = new TextElement(0, minY - 2, String.format("%.1f", min))
+        // Locale.ROOT: the JVM's default locale is the server's, not the viewer's
+        TextElement minLabel = axisLabel(filled(new TextElement(0, minY - 2, String.format(Locale.ROOT, "%.1f", min))
                 .fontSize(fontSize)
-                .fontWeight(TextElement.FontWeight.BOLD)
-                .fill(lineColor);
+                .fontWeight(TextElement.FontWeight.BOLD), lineColor));
 
-        TextElement maxLabel = new TextElement(0, maxY - 2, String.format("%.1f", max))
+        TextElement maxLabel = axisLabel(filled(new TextElement(0, maxY - 2, String.format(Locale.ROOT, "%.1f", max))
                 .fontSize(fontSize)
-                .fontWeight(TextElement.FontWeight.BOLD)
-                .fill(lineColor);
+                .fontWeight(TextElement.FontWeight.BOLD), lineColor));
 
         getElement().appendChild(minLabel);
         getElement().appendChild(maxLabel);
 
         if (title != null) {
-            TextElement titleLabel = new TextElement(viewBoxWidth, fontSize - 2.5, title)
+            TextElement titleLabel = filled(new TextElement(viewBoxWidth, fontSize - 2.5, title)
                     .fontSize(fontSize)
                     .fontWeight(TextElement.FontWeight.BOLD)
-                    .textAnchor(TextElement.TextAnchor.END)
-                    .fill(lineColor);
+                    .textAnchor(TextElement.TextAnchor.END), lineColor);
+            titleLabel.getClassList().add("sparkline-title");
             getElement().appendChild(titleLabel);
         }
 
         if (timeScaleStart != null) {
-            TextElement startLabel = new TextElement(0, height + 2 * fontSize, timeScaleStart)
+            TextElement startLabel = axisLabel(filled(new TextElement(0, height + 2 * fontSize, timeScaleStart)
                     .fontSize(fontSize)
-                    .textAnchor(TextElement.TextAnchor.START)
-                    .fill(lineColor);
+                    .textAnchor(TextElement.TextAnchor.START), lineColor));
             getElement().appendChild(startLabel);
         }
         if (timeScaleEnd != null) {
-            TextElement endLabel = new TextElement(viewBoxWidth, height + 2 * fontSize, timeScaleEnd)
+            TextElement endLabel = axisLabel(filled(new TextElement(viewBoxWidth, height + 2 * fontSize, timeScaleEnd)
                     .fontSize(fontSize)
-                    .textAnchor(TextElement.TextAnchor.END)
-                    .fill(lineColor);
+                    .textAnchor(TextElement.TextAnchor.END), lineColor));
             getElement().appendChild(endLabel);
         }
 
         if (crosshairEnabled) {
-            crosshairLine = new LineElement()
+            crosshairLine = faint(stroked(new LineElement()
                     .from(0, fontSize)
-                    .to(0, height + fontSize)
-                    .stroke(NamedColor.GRAY)
-                    .strokeWidth(1);
+                    .to(0, height + fontSize), lineColor)
+                    .strokeWidth(1), REFERENCE_LINE_OPACITY, "sparkline-crosshair");
             crosshairLine.setAttribute("visibility", "hidden");
             getElement().appendChild(crosshairLine);
         }
@@ -631,6 +716,7 @@ public class SvgSparkLine extends VSvg {
         if (getElement().getNode().isAttached()) {
             dataPoints = new ArrayList<>();
             additionalSeries = new ArrayList<>();
+            dataDropped = true;
         }
     }
 
@@ -651,9 +737,8 @@ public class SvgSparkLine extends VSvg {
     }
 
     private PolylineElement createPolyline(List<double[]> points, Color color) {
-        PolylineElement polyline = new PolylineElement()
-                .noFill()
-                .stroke(color);
+        PolylineElement polyline = dataStroke(stroked(new PolylineElement()
+                .noFill(), color));
         for (double[] point : points) {
             polyline.addPoint(round(point[0]), round(point[1]));
         }
@@ -665,17 +750,51 @@ public class SvgSparkLine extends VSvg {
     }
 
     /**
-     * Returns a faint version of the given color (same RGB at
-     * {@value #REFERENCE_LINE_OPACITY} opacity).
+     * Strokes in the given colour, or in currentColor without one. Every stroke
+     * keeps its width however the chart is stretched: the viewBox is scaled
+     * without keeping its aspect ratio, which would otherwise draw steep segments
+     * thicker than flat ones.
      */
-    private static Color faint(Color color) {
-        return color.toRgbColor().withAlpha(REFERENCE_LINE_OPACITY);
+    private static <T extends SvgGraphicsElement> T stroked(T element, Color color) {
+        if (color != null) {
+            element.stroke(color);
+        } else {
+            element.stroke("currentColor");
+        }
+        element.setAttribute("vector-effect", "non-scaling-stroke");
+        return element;
+    }
+
+    private static <T extends SvgGraphicsElement> T dataStroke(T element) {
+        return element.strokeWidth(DATA_STROKE_WIDTH);
+    }
+
+    private static <T extends SvgGraphicsElement> T filled(T element, Color color) {
+        if (color != null) {
+            element.fill(color);
+        } else {
+            element.fill("currentColor");
+        }
+        return element;
+    }
+
+    private static <T extends SvgGraphicsElement> T faint(T element, double opacity, String className) {
+        element.setAttribute("stroke-opacity", String.valueOf(opacity));
+        if (className != null) {
+            element.getClassList().add(className);
+        }
+        return element;
+    }
+
+    private static TextElement axisLabel(TextElement label) {
+        label.setAttribute("fill-opacity", String.valueOf(AXIS_LABEL_OPACITY));
+        label.getClassList().add("sparkline-label");
+        return label;
     }
 
     private PathElement createBezierPath(List<double[]> points, Color color) {
-        PathElement path = new PathElement()
-                .noFill()
-                .stroke(color);
+        PathElement path = dataStroke(stroked(new PathElement()
+                .noFill(), color));
 
         if (points.isEmpty()) return path;
 
