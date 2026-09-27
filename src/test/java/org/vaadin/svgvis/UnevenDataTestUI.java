@@ -26,6 +26,25 @@ public class UnevenDataTestUI extends VerticalLayout {
         add(chart(unevenReadings()));
         add(new Paragraph("A reading every minute for a day, rising only in the last 20 minutes."));
         add(chart(lateRise()));
+        add(new Paragraph("A noisy sensor over a day, as the default moving average draws it..."));
+        add(chart(noisyDay()));
+        add(new Paragraph("...and with LTTB, which keeps the noise's extremes."));
+        var lttb = chart(noisyDay());
+        lttb.setSmoothing(SvgSparkLine.Smoothing.LTTB);
+        add(lttb);
+    }
+
+    /** A cellar's day: a slow dip and recovery under ±0.2 °C of sensor noise. */
+    static List<SvgSparkLine.DataPoint> noisyDay() {
+        Instant start = Instant.parse("2026-09-26T15:55:00Z");
+        List<SvgSparkLine.DataPoint> data = new ArrayList<>();
+        var random = new java.util.Random(4052);
+        for (int i = 0; i < 24 * 60; i++) {
+            double t = i / (24.0 * 60);
+            double y = 16.5 - 4 * Math.exp(-Math.pow((t - 0.6) / 0.15, 2)) + random.nextGaussian() * 0.2;
+            data.add(SvgSparkLine.DataPoint.of(start.plus(Duration.ofMinutes(i)), y));
+        }
+        return data;
     }
 
     private static SvgSparkLine chart(List<SvgSparkLine.DataPoint> data) {

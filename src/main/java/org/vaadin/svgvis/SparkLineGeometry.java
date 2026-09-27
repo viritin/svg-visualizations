@@ -22,6 +22,68 @@ final class SparkLineGeometry {
     }
 
     /**
+     * Averages the data in about {@code target} buckets of equal x width, each
+     * drawn at its centre: sensor noise becomes a calm curve. The buckets'
+     * centres would leave the ends half a bucket short, and the last bucket mixes
+     * the latest readings with older ones, so a rise took half a bucket to show.
+     * The curve therefore also has a point at the first and at the last reading,
+     * each the average of the readings within half a bucket of it: it reaches the
+     * latest reading and turns with it, still without the noise.
+     *
+     * @param data   points; x may cover only part of 0–1 with a fixed x range
+     * @param target about how many buckets the whole 0–1 range is divided into
+     * @return the averages, or the data as is when it is short or too narrow
+     */
+    static List<DataPoint> movingAverage(List<DataPoint> data, int target) {
+        if (data.size() <= target) {
+            return data;
+        }
+        double minX = Double.POSITIVE_INFINITY;
+        double maxX = Double.NEGATIVE_INFINITY;
+        for (DataPoint dp : data) {
+            minX = Math.min(minX, dp.x());
+            maxX = Math.max(maxX, dp.x());
+        }
+        double range = maxX - minX;
+        if (range < 0.01) {
+            return data;
+        }
+        // As many buckets as this part of the 0–1 range deserves
+        int buckets = Math.max(3, (int) (target * range));
+        double width = range / buckets;
+        double[] sums = new double[buckets];
+        int[] counts = new int[buckets];
+        double firstSum = 0;
+        int firstCount = 0;
+        double lastSum = 0;
+        int lastCount = 0;
+        // One pass; the last reading belongs to the last bucket, not past it
+        for (DataPoint dp : data) {
+            int bucket = Math.min(buckets - 1, (int) ((dp.x() - minX) / width));
+            sums[bucket] += dp.y();
+            counts[bucket]++;
+            if (dp.x() <= minX + width / 2) {
+                firstSum += dp.y();
+                firstCount++;
+            }
+            if (dp.x() >= maxX - width / 2) {
+                lastSum += dp.y();
+                lastCount++;
+            }
+        }
+        List<DataPoint> result = new ArrayList<>(buckets + 2);
+        result.add(new DataPoint(minX, firstSum / firstCount));
+        for (int i = 0; i < buckets; i++) {
+            if (counts[i] > 0) {
+                result.add(new DataPoint(minX + (i + 0.5) * width, sums[i] / counts[i]));
+            }
+        }
+        result.add(new DataPoint(maxX, lastSum / lastCount));
+        // Very sparse data leaves too few buckets filled to draw anything better
+        return result.size() < 5 ? data : result;
+    }
+
+    /**
      * Largest-Triangle-Three-Buckets (Steinarsson 2013): picks {@code threshold}
      * of the actual points, the one in each bucket that spans the largest
      * triangle with its neighbours, so peaks and turns survive. The first and

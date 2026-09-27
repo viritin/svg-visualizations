@@ -86,19 +86,21 @@ public class SvgSparkLine extends VSvg {
         /** Ramer–Douglas–Peucker: drops points that the line would pass anyway. */
         RDP,
         /**
-         * Averages of fixed buckets; smooths noise, but the curve ends at the
-         * middle of the last bucket and so lags behind the latest readings.
+         * The default: averages of about 50 buckets, which smooths sensor noise
+         * into a calm curve. The curve still reaches the latest reading: its end
+         * is the average of the readings within half a bucket of it.
          */
         MOVING_AVERAGE,
         /**
-         * Largest-Triangle-Three-Buckets, the default: keeps the actual points
+         * Largest-Triangle-Three-Buckets: keeps about 150 of the actual readings
          * that best preserve the shape, peaks included, and always the first and
-         * the last, so the curve ends at the latest reading.
+         * the last. Faithful to every spike, so noisy data looks jagged; for
+         * clean data where peaks matter.
          */
         LTTB
     }
 
-    private Smoothing smoothing = Smoothing.LTTB;
+    private Smoothing smoothing = Smoothing.MOVING_AVERAGE;
     private static final int TARGET_POINTS = 50;
     /** Points LTTB keeps: a few pixels apart on a card-wide chart. */
     private static final int LTTB_POINTS = 150;
@@ -998,62 +1000,8 @@ public class SvgSparkLine extends VSvg {
     }
 
 
-    /**
-     * Applies moving average and downsamples data to approximately TARGET_POINTS.
-     * Groups data points by x-position buckets and averages each bucket.
-     * Works correctly with incomplete data that doesn't span the full x-range.
-     */
     private List<DataPoint> applyMovingAverage(List<DataPoint> data) {
-        if (data.size() <= TARGET_POINTS) {
-            return data;
-        }
-
-        // Find actual data range (may be smaller than 0-1 if using fixed xRange with incomplete data)
-        double dataMinX = data.getFirst().x();
-        double dataMaxX = data.getFirst().x();
-        for (DataPoint dp : data) {
-            if (dp.x() < dataMinX) dataMinX = dp.x();
-            if (dp.x() > dataMaxX) dataMaxX = dp.x();
-        }
-        double dataRange = dataMaxX - dataMinX;
-
-        // If data range is too small, return original
-        if (dataRange < 0.01) {
-            return data;
-        }
-
-        // Calculate number of buckets proportional to the data range
-        int numBuckets = Math.max(3, (int) (TARGET_POINTS * dataRange));
-        double bucketWidth = dataRange / numBuckets;
-
-        List<DataPoint> result = new ArrayList<>(numBuckets);
-
-        for (int i = 0; i < numBuckets; i++) {
-            double bucketStart = dataMinX + i * bucketWidth;
-            double bucketEnd = dataMinX + (i + 1) * bucketWidth;
-            double bucketCenter = (bucketStart + bucketEnd) / 2;
-
-            // Find all points in this bucket
-            double sum = 0;
-            int count = 0;
-            for (DataPoint dp : data) {
-                if (dp.x() >= bucketStart && dp.x() < bucketEnd) {
-                    sum += dp.y();
-                    count++;
-                }
-            }
-
-            if (count > 0) {
-                result.add(new DataPoint(bucketCenter, sum / count));
-            }
-        }
-
-        // If we got too few points (very sparse data), use original
-        if (result.size() < 3) {
-            return data;
-        }
-
-        return result;
+        return SparkLineGeometry.movingAverage(data, TARGET_POINTS);
     }
 
     /**

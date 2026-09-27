@@ -34,6 +34,26 @@ class SparkLineGeometryTest {
         assertTrue(data.containsAll(sampled), "only actual readings, no averages");
     }
 
+    /** Noise averaged away, yet the curve ends at the latest reading and shows its rise. */
+    @Test
+    void theMovingAverageReachesTheLatestReading() {
+        List<DataPoint> data = new ArrayList<>();
+        for (int i = 0; i < 1000; i++) {
+            double noise = (i % 2 == 0 ? 0.1 : -0.1);
+            double rise = i >= 980 ? (i - 980) * 0.1 : 0;
+            data.add(new DataPoint(i / 999.0, 20 + noise + rise));
+        }
+        List<DataPoint> averaged = SparkLineGeometry.movingAverage(data, 50);
+        assertEquals(1.0, averaged.getLast().x(), 1e-9, "the curve reaches the latest reading");
+        assertEquals(0.0, averaged.getFirst().x(), 1e-9, "and starts at the first");
+        for (DataPoint p : averaged.subList(1, averaged.size() - 5)) {
+            assertEquals(20, p.y(), 0.05, "the noise is averaged away");
+        }
+        DataPoint lastBucket = averaged.get(averaged.size() - 2);
+        assertTrue(averaged.getLast().y() > lastBucket.y(), "the end turns with the rise before a whole bucket shows it");
+        assertTrue(averaged.getLast().y() > 21, "the end is " + averaged.getLast().y());
+    }
+
     @Test
     void lttbLeavesShortDataAlone() {
         List<DataPoint> data = readings().subList(0, 50);
