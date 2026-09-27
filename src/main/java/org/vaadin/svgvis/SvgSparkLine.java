@@ -6,7 +6,6 @@ import in.virit.color.Color;
 import org.vaadin.firitin.components.VSvg;
 import org.vaadin.firitin.element.svg.LineElement;
 import org.vaadin.firitin.element.svg.PathElement;
-import org.vaadin.firitin.element.svg.PolylineElement;
 import org.vaadin.firitin.element.svg.SvgGraphicsElement;
 import org.vaadin.firitin.element.svg.TextElement;
 
@@ -28,6 +27,7 @@ import java.util.function.Consumer;
  * and axis labels fainter than the data. The parts carry stable class names for
  * page CSS: {@code sparkline-line} (the primary series), {@code sparkline-series}
  * (additional series), {@code sparkline-grid}, {@code sparkline-reference},
+ * {@code sparkline-gap} (the dashed bridge over a gap in the data),
  * {@code sparkline-label}, {@code sparkline-title} and {@code sparkline-crosshair}.
  */
 public class SvgSparkLine extends VSvg {
@@ -75,13 +75,28 @@ public class SvgSparkLine extends VSvg {
      * Smoothing algorithm options for the sparkline data.
      */
     public enum Smoothing {
+        /** Every point as it is. */
         NONE,
+        /** Ramer–Douglas–Peucker: drops points that the line would pass anyway. */
         RDP,
-        MOVING_AVERAGE
+        /**
+         * Averages of fixed buckets; smooths noise, but the curve ends at the
+         * middle of the last bucket and so lags behind the latest readings.
+         */
+        MOVING_AVERAGE,
+        /**
+         * Largest-Triangle-Three-Buckets, the default: keeps the actual points
+         * that best preserve the shape, peaks included, and always the first and
+         * the last, so the curve ends at the latest reading.
+         */
+        LTTB
     }
 
-    private Smoothing smoothing = Smoothing.MOVING_AVERAGE;
+    private Smoothing smoothing = Smoothing.LTTB;
     private static final int TARGET_POINTS = 50;
+    /** Points LTTB keeps: a few pixels apart on a card-wide chart. */
+    private static final int LTTB_POINTS = 150;
+    private static final double GAP_OPACITY = 0.4;
     private boolean useBezierCurve = true;
 
     /**
@@ -563,6 +578,8 @@ public class SvgSparkLine extends VSvg {
             dataPoints = applyMovingAverage(dataPoints);
         } else if (smoothing == Smoothing.RDP) {
             dataPoints = applyRdpToDataPoints(dataPoints);
+        } else if (smoothing == Smoothing.LTTB) {
+            dataPoints = SparkLineGeometry.lttb(dataPoints, LTTB_POINTS);
         }
 
         // Apply smoothing to additional series
@@ -571,6 +588,7 @@ public class SvgSparkLine extends VSvg {
             List<DataPoint> smoothedData = switch (smoothing) {
                 case MOVING_AVERAGE -> applyMovingAverage(series.data());
                 case RDP -> applyRdpToDataPoints(series.data());
+                case LTTB -> SparkLineGeometry.lttb(series.data(), LTTB_POINTS);
                 default -> series.data();
             };
             smoothedSeries.add(new DataSeries(smoothedData, series.color()));
@@ -628,15 +646,11 @@ public class SvgSparkLine extends VSvg {
         final double finalMin = min;
         final double finalMax = max;
         for (DataSeries series : additionalSeries) {
-            SvgGraphicsElement line = createLineFromSmoothed(series.data(), series.color(), finalMin, finalMax);
-            line.getClassList().add("sparkline-series");
-            getElement().appendChild(line);
+            appendLine(series.data(), series.color(), finalMin, finalMax, "sparkline-series");
         }
 
         // Draw primary series
-        SvgGraphicsElement primary = createLineFromSmoothed(dataPoints, lineColor, min, max);
-        primary.getClassList().add("sparkline-line");
-        getElement().appendChild(primary);
+        appendLine(dataPoints, lineColor, min, max, "sparkline-line");
 
         // Draw reference lines on top of the data, with a faint default color
         for (ReferenceLine ref : referenceLines) {
@@ -720,29 +734,57 @@ public class SvgSparkLine extends VSvg {
         }
     }
 
-    private SvgGraphicsElement createLineFromSmoothed(List<DataPoint> seriesData, Color color, double min, double max) {
-        // Convert to screen coordinates (data is already smoothed/reduced)
+    /**
+     * Draws a series as one path through its points, a monotone curve or
+     * straight segments, broken where the data has a gap. Gaps are bridged with a
+     * faint dashed line: the curve does not pretend to know what happened there,
+     * but the eye can still follow the series.
+     */
+    private void appendLine(List<DataPoint> seriesData, Color color, double min, double max, String className) {
         List<double[]> points = new ArrayList<>(seriesData.size());
         for (DataPoint dp : seriesData) {
             double x = dp.x() * viewBoxWidth;
             double y = height - (dp.y() - min) / (max - min) * height + fontSize;
             points.add(new double[]{x, y});
         }
-
-        if (useBezierCurve && points.size() >= 2) {
-            return createBezierPath(points, color);
-        } else {
-            return createPolyline(points, color);
+        List<List<double[]>> runs = SparkLineGeometry.splitAtGaps(points);
+        if (runs.isEmpty()) {
+            return;
         }
-    }
 
-    private PolylineElement createPolyline(List<double[]> points, Color color) {
-        PolylineElement polyline = dataStroke(stroked(new PolylineElement()
-                .noFill(), color));
-        for (double[] point : points) {
-            polyline.addPoint(round(point[0]), round(point[1]));
+        PathElement line = dataStroke(stroked(new PathElement().noFill(), color));
+        for (List<double[]> run : runs) {
+            double[] first = run.getFirst();
+            line.moveTo(round(first[0]), round(first[1]));
+            if (run.size() == 1) {
+                // A lone reading between gaps: a dot, as a zero-length segment with round caps
+                line.lineTo(round(first[0]) + 0.1, round(first[1]));
+                line.setAttribute("stroke-linecap", "round");
+            } else if (useBezierCurve) {
+                for (double[] c : SparkLineGeometry.monotoneCurve(run)) {
+                    line.cubicBezierTo(round(c[0]), round(c[1]), round(c[2]), round(c[3]), round(c[4]), round(c[5]));
+                }
+            } else {
+                for (int i = 1; i < run.size(); i++) {
+                    line.lineTo(round(run.get(i)[0]), round(run.get(i)[1]));
+                }
+            }
         }
-        return polyline;
+        line.getClassList().add(className);
+        getElement().appendChild(line);
+
+        if (runs.size() > 1) {
+            PathElement gaps = faint(stroked(new PathElement().noFill(), color)
+                    .strokeWidth(1)
+                    .strokeDasharray(3, 3), GAP_OPACITY, "sparkline-gap");
+            for (int i = 1; i < runs.size(); i++) {
+                double[] from = runs.get(i - 1).getLast();
+                double[] to = runs.get(i).getFirst();
+                gaps.moveTo(round(from[0]), round(from[1]));
+                gaps.lineTo(round(to[0]), round(to[1]));
+            }
+            getElement().appendChild(gaps);
+        }
     }
 
     private static double round(double value) {
@@ -792,40 +834,6 @@ public class SvgSparkLine extends VSvg {
         return label;
     }
 
-    private PathElement createBezierPath(List<double[]> points, Color color) {
-        PathElement path = dataStroke(stroked(new PathElement()
-                .noFill(), color));
-
-        if (points.isEmpty()) return path;
-
-        double[] first = points.getFirst();
-        path.moveTo(round(first[0]), round(first[1]));
-
-        if (points.size() == 1) return path;
-
-        if (points.size() == 2) {
-            double[] second = points.get(1);
-            path.lineTo(round(second[0]), round(second[1]));
-            return path;
-        }
-
-        for (int i = 0; i < points.size() - 1; i++) {
-            double[] p0 = points.get(Math.max(0, i - 1));
-            double[] p1 = points.get(i);
-            double[] p2 = points.get(i + 1);
-            double[] p3 = points.get(Math.min(points.size() - 1, i + 2));
-
-            double tension = 6.0;
-            double cp1x = round(p1[0] + (p2[0] - p0[0]) / tension);
-            double cp1y = round(p1[1] + (p2[1] - p0[1]) / tension);
-            double cp2x = round(p2[0] - (p3[0] - p1[0]) / tension);
-            double cp2y = round(p2[1] - (p3[1] - p1[1]) / tension);
-
-            path.cubicBezierTo(cp1x, cp1y, cp2x, cp2y, round(p2[0]), round(p2[1]));
-        }
-
-        return path;
-    }
 
     /**
      * Applies moving average and downsamples data to approximately TARGET_POINTS.

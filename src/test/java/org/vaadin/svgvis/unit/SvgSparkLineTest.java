@@ -54,10 +54,11 @@ public class SvgSparkLineTest {
     @Test
     public void testSmoothingEnumValues() {
         SvgSparkLine.Smoothing[] values = SvgSparkLine.Smoothing.values();
-        assertEquals(3, values.length);
+        assertEquals(4, values.length);
         assertEquals(SvgSparkLine.Smoothing.NONE, SvgSparkLine.Smoothing.valueOf("NONE"));
         assertEquals(SvgSparkLine.Smoothing.RDP, SvgSparkLine.Smoothing.valueOf("RDP"));
         assertEquals(SvgSparkLine.Smoothing.MOVING_AVERAGE, SvgSparkLine.Smoothing.valueOf("MOVING_AVERAGE"));
+        assertEquals(SvgSparkLine.Smoothing.LTTB, SvgSparkLine.Smoothing.valueOf("LTTB"));
     }
 
     @Test
