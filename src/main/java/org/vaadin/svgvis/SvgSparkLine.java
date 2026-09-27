@@ -27,7 +27,8 @@ import java.util.function.Consumer;
  * and axis labels fainter than the data. The parts carry stable class names for
  * page CSS: {@code sparkline-line} (the primary series), {@code sparkline-series}
  * (additional series), {@code sparkline-grid}, {@code sparkline-reference},
- * {@code sparkline-gap} (the dashed bridge over a gap in the data),
+ * {@code sparkline-gap} (the dashed bridge over a gap in the data, see
+ * {@link #setShowGaps(boolean)}),
  * {@code sparkline-label} (with {@code sparkline-line-label} or
  * {@code sparkline-series-label} on the scale labels), {@code sparkline-title}
  * and {@code sparkline-crosshair}.
@@ -122,6 +123,7 @@ public class SvgSparkLine extends VSvg {
 
     private String title;
     private String unit;
+    private boolean showGaps;
     private String timeScaleStart;
     private String timeScaleEnd;
     private Consumer<Double> crosshairListener;
@@ -368,6 +370,22 @@ public class SvgSparkLine extends VSvg {
     }
 
     /**
+     * Breaks the curve where the data has a gap, an interval more than five
+     * times those around it, and bridges it with a faint dashed line
+     * ({@code sparkline-gap}) instead of a smooth curve that claims readings that
+     * were never taken. Off by default: finding the gaps goes over all the raw
+     * data on every drawing, a few milliseconds per million readings.
+     */
+    public void setShowGaps(boolean showGaps) {
+        this.showGaps = showGaps;
+        changed();
+    }
+
+    public boolean isShowGaps() {
+        return showGaps;
+    }
+
+    /**
      * A unit appended to the primary scale's min and max labels as is, e.g.
      * {@code " °C"} (include the space if you want one), or null for none.
      */
@@ -610,10 +628,10 @@ public class SvgSparkLine extends VSvg {
         if (dataPoints.isEmpty()) return;
 
         // Gaps come from the data as it is: a downsampler's points are unevenly spaced
-        List<double[]> primaryGaps = gapsIn(dataPoints);
+        List<double[]> primaryGaps = showGaps ? gapsIn(dataPoints) : List.of();
         List<List<double[]>> seriesGaps = new ArrayList<>();
         for (DataSeries series : additionalSeries) {
-            seriesGaps.add(gapsIn(series.data()));
+            seriesGaps.add(showGaps ? gapsIn(series.data()) : List.of());
         }
 
         // Apply smoothing to primary data BEFORE computing min/max

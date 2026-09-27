@@ -126,6 +126,25 @@ public class SvgSparkLineDrawingTest extends BrowserlessTest {
         assertEquals(List.of("1009.8 hPa", "1011.4 hPa"), right);
     }
 
+    /** Gaps are opt in: off, the curve runs through; on, it breaks and a dashed line bridges it. */
+    @Test
+    public void gapsAreBridgedOnlyWhenAskedFor() {
+        List<SvgSparkLine.DataPoint> gappy = new java.util.ArrayList<>();
+        for (int i = 0; i < 10; i++) gappy.add(SvgSparkLine.DataPoint.of(i, i % 3));
+        for (int i = 0; i < 10; i++) gappy.add(SvgSparkLine.DataPoint.of(500 + i, i % 3));
+
+        SvgSparkLine plain = new SvgSparkLine(100);
+        plain.setData(gappy);
+        plain.draw();
+        assertTrue(part(plain, "sparkline-gap").isEmpty());
+
+        SvgSparkLine withGaps = new SvgSparkLine(100);
+        withGaps.setShowGaps(true);
+        withGaps.setData(gappy);
+        withGaps.draw();
+        assertTrue(part(withGaps, "sparkline-gap").isPresent());
+    }
+
     private static List<String> labels(SvgSparkLine chart, String className) {
         return chart.getElement().getChildren()
                 .filter(e -> e.getClassList().contains(className))

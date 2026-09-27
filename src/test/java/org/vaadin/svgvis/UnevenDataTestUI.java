@@ -30,6 +30,7 @@ public class UnevenDataTestUI extends VerticalLayout {
 
     private static SvgSparkLine chart(List<SvgSparkLine.DataPoint> data) {
         var chart = new SvgSparkLine(100);
+        chart.setShowGaps(true);
         chart.setTitle("Temperature °C");
         chart.setData(data);
         chart.setTimeScale("start", "now");
