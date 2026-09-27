@@ -109,4 +109,26 @@ public class SvgSparkLineDrawingTest extends BrowserlessTest {
         respond();
         assertTrue(part(chart, "sparkline-line").isPresent());
     }
+
+    /** Humidity and pressure in one chart: each against its own scale, labelled at its own edge. */
+    @Test
+    public void aSeriesWithItsOwnScaleIsLabelledAtTheRight() {
+        SvgSparkLine chart = new SvgSparkLine(100);
+        chart.setData(40, 45, 50);
+        chart.setUnit(" % RH");
+        chart.addSeriesWithOwnScale(List.of(SvgSparkLine.DataPoint.of(0, 1009.8), SvgSparkLine.DataPoint.of(1, 1011.4)),
+                null, " hPa");
+        chart.draw();
+
+        List<String> left = labels(chart, "sparkline-line-label");
+        List<String> right = labels(chart, "sparkline-series-label");
+        assertEquals(List.of("40.0 % RH", "50.0 % RH"), left, "the primary scale, not stretched by the pressure");
+        assertEquals(List.of("1009.8 hPa", "1011.4 hPa"), right);
+    }
+
+    private static List<String> labels(SvgSparkLine chart, String className) {
+        return chart.getElement().getChildren()
+                .filter(e -> e.getClassList().contains(className))
+                .map(Element::getText).toList();
+    }
 }

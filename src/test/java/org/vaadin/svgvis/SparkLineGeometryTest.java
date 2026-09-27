@@ -74,6 +74,18 @@ class SparkLineGeometryTest {
         assertEquals(1, SparkLineGeometry.splitAtGaps(points).size());
     }
 
+    /** What LTTB keeps is unevenly spaced; gaps found before downsampling are the real ones. */
+    @Test
+    void downsampledPointsKeepOnlyTheRealGaps() {
+        List<DataPoint> data = readings();
+        List<double[]> raw = data.stream().map(p -> new double[]{p.x(), p.y()}).toList();
+        List<double[]> gaps = SparkLineGeometry.gaps(raw);
+        assertEquals(0, gaps.size(), "a reading every second has no gaps");
+        List<double[]> sampled = SparkLineGeometry.lttb(data, 40).stream()
+                .map(p -> new double[]{p.x(), p.y()}).toList();
+        assertEquals(1, SparkLineGeometry.splitAtGaps(sampled, gaps).size());
+    }
+
     @Test
     void evenReadingsAreOneRun() {
         List<double[]> points = new ArrayList<>();

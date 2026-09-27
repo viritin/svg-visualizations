@@ -28,7 +28,9 @@ import java.util.function.Consumer;
  * page CSS: {@code sparkline-line} (the primary series), {@code sparkline-series}
  * (additional series), {@code sparkline-grid}, {@code sparkline-reference},
  * {@code sparkline-gap} (the dashed bridge over a gap in the data),
- * {@code sparkline-label}, {@code sparkline-title} and {@code sparkline-crosshair}.
+ * {@code sparkline-label} (with {@code sparkline-line-label} or
+ * {@code sparkline-series-label} on the scale labels), {@code sparkline-title}
+ * and {@code sparkline-crosshair}.
  */
 public class SvgSparkLine extends VSvg {
     private final int height;
@@ -102,7 +104,13 @@ public class SvgSparkLine extends VSvg {
     /**
      * Represents an additional data series with its own color.
      */
-    public record DataSeries(List<DataPoint> data, Color color) implements java.io.Serializable {}
+    public record DataSeries(List<DataPoint> data, Color color, boolean ownScale, String unit)
+            implements java.io.Serializable {
+        /** A series drawn against the primary series' scale. */
+        public DataSeries(List<DataPoint> data, Color color) {
+            this(data, color, false, null);
+        }
+    }
 
     /**
      * A fixed horizontal reference line at a given y value (e.g. a target temperature).
@@ -113,6 +121,7 @@ public class SvgSparkLine extends VSvg {
     public record ReferenceLine(double value, Color color, String label) implements java.io.Serializable {}
 
     private String title;
+    private String unit;
     private String timeScaleStart;
     private String timeScaleEnd;
     private Consumer<Double> crosshairListener;
@@ -124,9 +133,9 @@ public class SvgSparkLine extends VSvg {
      */
     public SvgSparkLine(int width, int height) {
         this.viewBoxWidth = width;
-        this.height = height - 2 * fontSize;
+        this.height = height - 3 * fontSize;
         this.rdpEpsilon = Math.max(RDP_EPSILON_BASE, width / 100.0);
-        int totalHeight = this.height + 2 * fontSize;
+        int totalHeight = this.height + 3 * fontSize;
         getElement().setAttribute("viewBox", "0 0 %d %d".formatted(width, totalHeight));
         getElement().setAttribute("preserveAspectRatio", "none");
         withSize(width + "px", totalHeight + "px");
@@ -137,9 +146,9 @@ public class SvgSparkLine extends VSvg {
      */
     public SvgSparkLine(int height) {
         this.viewBoxWidth = 1000;
-        this.height = height - 2 * fontSize;
+        this.height = height - 3 * fontSize;
         this.rdpEpsilon = 1.0;
-        int totalHeight = this.height + 2 * fontSize;
+        int totalHeight = this.height + 3 * fontSize;
         getElement().setAttribute("viewBox", "0 0 %d %d".formatted(viewBoxWidth, totalHeight));
         getElement().setAttribute("preserveAspectRatio", "none");
         setWidth("100%");
@@ -254,6 +263,25 @@ public class SvgSparkLine extends VSvg {
     }
 
     /**
+     * Adds a series drawn against a scale of its own, for a second quantity in
+     * other units, e.g. air pressure next to humidity. Its min and max are
+     * labelled at the right edge, in the series' colour and with its unit, while
+     * the primary series' scale stays at the left. Only the first such series
+     * gets labels.
+     *
+     * @param data  the points, with the same kind of x as the primary series
+     * @param color the colour of the line and its labels, or null for currentColor
+     *              (then style it with the {@code sparkline-series} and
+     *              {@code sparkline-series-label} classes)
+     * @param unit  appended to the scale labels as is (include the space if you
+     *              want one), or null for none
+     */
+    public void addSeriesWithOwnScale(List<DataPoint> data, Color color, String unit) {
+        additionalSeries.add(new DataSeries(normalizeDataPoints(data), color, true, unit));
+        changed();
+    }
+
+    /**
      * Adds an additional data series (legacy API).
      */
     public void addSeries(double[] values, Color color) {
@@ -337,6 +365,15 @@ public class SvgSparkLine extends VSvg {
 
     public Color getLineColor() {
         return lineColor;
+    }
+
+    /**
+     * A unit appended to the primary scale's min and max labels as is, e.g.
+     * {@code " °C"} (include the space if you want one), or null for none.
+     */
+    public void setUnit(String unit) {
+        this.unit = unit;
+        changed();
     }
 
     public void setTitle(String title) {
@@ -483,7 +520,7 @@ public class SvgSparkLine extends VSvg {
             new ResizeObserver(updateTextScale).observe(svg);
             svg._updateTextScale = updateTextScale;
             requestAnimationFrame(updateTextScale);
-            """.formatted(viewBoxWidth, height + 2 * fontSize));
+            """.formatted(viewBoxWidth, height + 3 * fontSize));
     }
 
     private void setupCrosshairEvents() {
@@ -572,6 +609,13 @@ public class SvgSparkLine extends VSvg {
 
         if (dataPoints.isEmpty()) return;
 
+        // Gaps come from the data as it is: a downsampler's points are unevenly spaced
+        List<double[]> primaryGaps = gapsIn(dataPoints);
+        List<List<double[]>> seriesGaps = new ArrayList<>();
+        for (DataSeries series : additionalSeries) {
+            seriesGaps.add(gapsIn(series.data()));
+        }
+
         // Apply smoothing to primary data BEFORE computing min/max
         // This reduces memory footprint and ensures crosshair uses displayed values
         if (smoothing == Smoothing.MOVING_AVERAGE) {
@@ -591,7 +635,7 @@ public class SvgSparkLine extends VSvg {
                 case LTTB -> SparkLineGeometry.lttb(series.data(), LTTB_POINTS);
                 default -> series.data();
             };
-            smoothedSeries.add(new DataSeries(smoothedData, series.color()));
+            smoothedSeries.add(new DataSeries(smoothedData, series.color(), series.ownScale(), series.unit()));
         }
         additionalSeries = smoothedSeries;
 
@@ -603,6 +647,9 @@ public class SvgSparkLine extends VSvg {
             if (dp.y() > max) max = dp.y();
         }
         for (DataSeries series : additionalSeries) {
+            if (series.ownScale()) {
+                continue;
+            }
             for (DataPoint dp : series.data()) {
                 if (dp.y() < min) min = dp.y();
                 if (dp.y() > max) max = dp.y();
@@ -645,12 +692,24 @@ public class SvgSparkLine extends VSvg {
         // Draw additional series first (so primary is on top)
         final double finalMin = min;
         final double finalMax = max;
-        for (DataSeries series : additionalSeries) {
-            appendLine(series.data(), series.color(), finalMin, finalMax, "sparkline-series");
+        DataSeries secondScale = null;
+        double[] secondRange = null;
+        for (int i = 0; i < additionalSeries.size(); i++) {
+            DataSeries series = additionalSeries.get(i);
+            if (series.ownScale()) {
+                double[] range = range(series.data());
+                appendLine(series.data(), seriesGaps.get(i), series.color(), range[0], range[1], "sparkline-series");
+                if (secondScale == null) {
+                    secondScale = series;
+                    secondRange = range;
+                }
+            } else {
+                appendLine(series.data(), seriesGaps.get(i), series.color(), finalMin, finalMax, "sparkline-series");
+            }
         }
 
         // Draw primary series
-        appendLine(dataPoints, lineColor, min, max, "sparkline-line");
+        appendLine(dataPoints, primaryGaps, lineColor, min, max, "sparkline-line");
 
         // Draw reference lines on top of the data, with a faint default color
         for (ReferenceLine ref : referenceLines) {
@@ -680,34 +739,31 @@ public class SvgSparkLine extends VSvg {
 
         // Labels
         // Locale.ROOT: the JVM's default locale is the server's, not the viewer's
-        TextElement minLabel = axisLabel(filled(new TextElement(0, minY - 2, String.format(Locale.ROOT, "%.1f", min))
-                .fontSize(fontSize)
-                .fontWeight(TextElement.FontWeight.BOLD), lineColor));
-
-        TextElement maxLabel = axisLabel(filled(new TextElement(0, maxY - 2, String.format(Locale.ROOT, "%.1f", max))
-                .fontSize(fontSize)
-                .fontWeight(TextElement.FontWeight.BOLD), lineColor));
-
-        getElement().appendChild(minLabel);
-        getElement().appendChild(maxLabel);
+        appendScaleLabels(0, TextElement.TextAnchor.START, min, max, unit, lineColor, "sparkline-line-label");
+        if (secondScale != null) {
+            appendScaleLabels(viewBoxWidth, TextElement.TextAnchor.END, secondRange[0], secondRange[1],
+                    secondScale.unit(), secondScale.color(), "sparkline-series-label");
+        }
 
         if (title != null) {
-            TextElement titleLabel = filled(new TextElement(viewBoxWidth, fontSize - 2.5, title)
+            // With a second scale at the right, the title moves to the middle
+            boolean centred = secondScale != null;
+            TextElement titleLabel = filled(new TextElement(centred ? viewBoxWidth / 2.0 : viewBoxWidth, fontSize - 2.5, title)
                     .fontSize(fontSize)
                     .fontWeight(TextElement.FontWeight.BOLD)
-                    .textAnchor(TextElement.TextAnchor.END), lineColor);
+                    .textAnchor(centred ? TextElement.TextAnchor.MIDDLE : TextElement.TextAnchor.END), lineColor);
             titleLabel.getClassList().add("sparkline-title");
             getElement().appendChild(titleLabel);
         }
 
         if (timeScaleStart != null) {
-            TextElement startLabel = axisLabel(filled(new TextElement(0, height + 2 * fontSize, timeScaleStart)
+            TextElement startLabel = axisLabel(filled(new TextElement(0, height + 3 * fontSize, timeScaleStart)
                     .fontSize(fontSize)
                     .textAnchor(TextElement.TextAnchor.START), lineColor));
             getElement().appendChild(startLabel);
         }
         if (timeScaleEnd != null) {
-            TextElement endLabel = axisLabel(filled(new TextElement(viewBoxWidth, height + 2 * fontSize, timeScaleEnd)
+            TextElement endLabel = axisLabel(filled(new TextElement(viewBoxWidth, height + 3 * fontSize, timeScaleEnd)
                     .fontSize(fontSize)
                     .textAnchor(TextElement.TextAnchor.END), lineColor));
             getElement().appendChild(endLabel);
@@ -735,19 +791,71 @@ public class SvgSparkLine extends VSvg {
     }
 
     /**
+     * The min and max of a scale: the max above the top grid line, the min below
+     * the bottom one, on a row of its own above the times. Both stay out of the
+     * plot, where a curve at its extreme would run right through them.
+     */
+    private void appendScaleLabels(double x, TextElement.TextAnchor anchor, double min, double max,
+                                   String unit, Color color, String className) {
+        String suffix = unit != null ? unit : "";
+        double[][] positions = {{height + 2 * fontSize - 2, min}, {fontSize - 2, max}};
+        for (double[] position : positions) {
+            // Locale.ROOT: the JVM's default locale is the server's, not the viewer's
+            TextElement label = axisLabel(filled(new TextElement(x, position[0],
+                    String.format(Locale.ROOT, "%.1f", position[1]) + suffix)
+                    .fontSize(fontSize)
+                    .fontWeight(TextElement.FontWeight.BOLD)
+                    .textAnchor(anchor), color));
+            label.getClassList().add(className);
+            getElement().appendChild(label);
+        }
+    }
+
+    /** The gaps of normalized data, as {from, to} ranges of its 0–1 x. */
+    private static List<double[]> gapsIn(List<DataPoint> data) {
+        double[] xs = new double[data.size()];
+        for (int i = 0; i < xs.length; i++) {
+            xs[i] = data.get(i).x();
+        }
+        return SparkLineGeometry.gaps(xs);
+    }
+
+    /** Min and max of a series, padded when it is flat so that it can be scaled. */
+    private static double[] range(List<DataPoint> data) {
+        double min = Double.POSITIVE_INFINITY;
+        double max = Double.NEGATIVE_INFINITY;
+        for (DataPoint dp : data) {
+            min = Math.min(min, dp.y());
+            max = Math.max(max, dp.y());
+        }
+        if (data.isEmpty()) {
+            return new double[]{0, 1};
+        }
+        if (max - min < 1e-9) {
+            double padding = max == 0 ? 1.0 : Math.abs(max) * 0.05;
+            min -= padding;
+            max += padding;
+        }
+        return new double[]{min, max};
+    }
+
+    /**
      * Draws a series as one path through its points, a monotone curve or
      * straight segments, broken where the data has a gap. Gaps are bridged with a
      * faint dashed line: the curve does not pretend to know what happened there,
      * but the eye can still follow the series.
      */
-    private void appendLine(List<DataPoint> seriesData, Color color, double min, double max, String className) {
+    private void appendLine(List<DataPoint> seriesData, List<double[]> gaps, Color color, double min, double max,
+                            String className) {
         List<double[]> points = new ArrayList<>(seriesData.size());
         for (DataPoint dp : seriesData) {
             double x = dp.x() * viewBoxWidth;
             double y = height - (dp.y() - min) / (max - min) * height + fontSize;
             points.add(new double[]{x, y});
         }
-        List<List<double[]>> runs = SparkLineGeometry.splitAtGaps(points);
+        List<double[]> screenGaps = gaps.stream()
+                .map(g -> new double[]{g[0] * viewBoxWidth, g[1] * viewBoxWidth}).toList();
+        List<List<double[]>> runs = SparkLineGeometry.splitAtGaps(points, screenGaps);
         if (runs.isEmpty()) {
             return;
         }
@@ -774,16 +882,16 @@ public class SvgSparkLine extends VSvg {
         getElement().appendChild(line);
 
         if (runs.size() > 1) {
-            PathElement gaps = faint(stroked(new PathElement().noFill(), color)
+            PathElement bridges = faint(stroked(new PathElement().noFill(), color)
                     .strokeWidth(1)
                     .strokeDasharray(3, 3), GAP_OPACITY, "sparkline-gap");
             for (int i = 1; i < runs.size(); i++) {
                 double[] from = runs.get(i - 1).getLast();
                 double[] to = runs.get(i).getFirst();
-                gaps.moveTo(round(from[0]), round(from[1]));
-                gaps.lineTo(round(to[0]), round(to[1]));
+                bridges.moveTo(round(from[0]), round(from[1]));
+                bridges.lineTo(round(to[0]), round(to[1]));
             }
-            getElement().appendChild(gaps);
+            getElement().appendChild(bridges);
         }
     }
 

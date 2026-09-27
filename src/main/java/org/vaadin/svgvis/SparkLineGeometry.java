@@ -77,62 +77,139 @@ final class SparkLineGeometry {
     }
 
     /**
-     * Splits screen points into runs at gaps, where an interval is more than
-     * {@link #GAP_FACTOR} times the median of the intervals around it: a smooth
+     * The gaps in the data, as {from, to} x ranges: intervals more than
+     * {@link #GAP_FACTOR} times the median of the intervals around them. A smooth
      * curve across a gap would claim readings that were never taken. The median
      * is local because sensors change pace (a burst every few seconds, then a
      * reading every few minutes), and against one global median every interval
-     * of the slower part would count as a gap. Points sharing an x with the
-     * previous one are dropped, as a curve cannot go through both.
+     * of the slower part would count as a gap.
+     * <p>
+     * Found in the data before it is downsampled: the points a downsampler keeps
+     * are unevenly spaced by nature, and their spacing would show gaps that are
+     * not there.
      *
      * @param points {x, y} pairs in x order
+     */
+    static List<double[]> gaps(List<double[]> points) {
+        double[] xs = new double[points.size()];
+        for (int i = 0; i < xs.length; i++) {
+            xs[i] = points.get(i)[0];
+        }
+        return gaps(xs);
+    }
+
+    /**
+     * The gaps of x values in ascending order; see {@link #gaps(List)}. Runs on
+     * every drawing over all the raw data, so it keeps to primitive arrays and one
+     * reused buffer: a million readings allocate two arrays, not a million.
+     */
+    static List<double[]> gaps(double[] xs) {
+        // Intervals and the x they start from, skipping repeated x values, which
+        // would make zero-length intervals
+        double[] intervals = new double[Math.max(0, xs.length - 1)];
+        double[] starts = new double[intervals.length];
+        int n = 0;
+        double previous = xs.length > 0 ? xs[0] : 0;
+        for (int i = 1; i < xs.length; i++) {
+            if (xs[i] > previous) {
+                starts[n] = previous;
+                intervals[n++] = xs[i] - previous;
+                previous = xs[i];
+            }
+        }
+        List<double[]> gaps = new ArrayList<>();
+        if (n < 2) {
+            return gaps;
+        }
+        double[] around = new double[2 * GAP_WINDOW];
+        for (int i = 0; i < n; i++) {
+            // The median is at least the shortest interval around: most intervals
+            // are ruled out by that alone, without sorting anything
+            if (intervals[i] > GAP_FACTOR * localMin(intervals, n, i)
+                    && intervals[i] > GAP_FACTOR * localMedian(intervals, n, i, around)) {
+                gaps.add(new double[]{starts[i], starts[i] + intervals[i]});
+            }
+        }
+        return gaps;
+    }
+
+    private static double localMin(double[] intervals, int n, int index) {
+        double min = Double.POSITIVE_INFINITY;
+        for (int j = Math.max(0, index - GAP_WINDOW); j < Math.min(n, index + GAP_WINDOW + 1); j++) {
+            if (j != index && intervals[j] < min) {
+                min = intervals[j];
+            }
+        }
+        return min;
+    }
+
+    /** Splits points into runs at their own gaps; see {@link #gaps(List)}. */
+    static List<List<double[]>> splitAtGaps(List<double[]> points) {
+        return splitAtGaps(points, gaps(points));
+    }
+
+    /**
+     * Splits points into runs wherever one of the given gaps lies between two
+     * consecutive points. Points sharing an x with the previous one are dropped,
+     * as a curve cannot go through both.
+     *
+     * @param points {x, y} pairs in x order
+     * @param gaps   {from, to} x ranges, in the points' x units
      * @return the runs, each at least one point
      */
-    static List<List<double[]>> splitAtGaps(List<double[]> points) {
+    static List<List<double[]>> splitAtGaps(List<double[]> points, List<double[]> gaps) {
+        List<double[]> distinct = distinctX(points);
+        List<List<double[]>> runs = new ArrayList<>();
+        if (distinct.isEmpty()) {
+            return runs;
+        }
+        List<double[]> run = new ArrayList<>();
+        run.add(distinct.getFirst());
+        for (int i = 1; i < distinct.size(); i++) {
+            double from = distinct.get(i - 1)[0];
+            double to = distinct.get(i)[0];
+            for (double[] gap : gaps) {
+                if (from <= gap[0] + 1e-9 && to >= gap[1] - 1e-9) {
+                    runs.add(run);
+                    run = new ArrayList<>();
+                    break;
+                }
+            }
+            run.add(distinct.get(i));
+        }
+        runs.add(run);
+        return runs;
+    }
+
+    private static List<double[]> distinctX(List<double[]> points) {
         List<double[]> distinct = new ArrayList<>(points.size());
         for (double[] p : points) {
             if (distinct.isEmpty() || p[0] > distinct.getLast()[0]) {
                 distinct.add(p);
             }
         }
-        List<List<double[]>> runs = new ArrayList<>();
-        if (distinct.isEmpty()) {
-            return runs;
-        }
-        double[] intervals = new double[distinct.size() - 1];
-        for (int i = 1; i < distinct.size(); i++) {
-            intervals[i - 1] = distinct.get(i)[0] - distinct.get(i - 1)[0];
-        }
-        List<double[]> run = new ArrayList<>();
-        run.add(distinct.getFirst());
-        for (int i = 0; i < intervals.length; i++) {
-            if (isGap(intervals, i)) {
-                runs.add(run);
-                run = new ArrayList<>();
-            }
-            run.add(distinct.get(i + 1));
-        }
-        runs.add(run);
-        return runs;
+        return distinct;
     }
 
-    private static boolean isGap(double[] intervals, int index) {
+    /** The median of the intervals around {@code index}, sorted in the given buffer by insertion. */
+    private static double localMedian(double[] intervals, int n, int index, double[] buffer) {
         int from = Math.max(0, index - GAP_WINDOW);
-        int to = Math.min(intervals.length, index + GAP_WINDOW + 1);
-        double[] around = new double[to - from - 1];
-        int k = 0;
+        int to = Math.min(n, index + GAP_WINDOW + 1);
+        int count = 0;
         for (int j = from; j < to; j++) {
-            if (j != index) {
-                around[k++] = intervals[j];
+            if (j == index) {
+                continue;
             }
+            double value = intervals[j];
+            int k = count++;
+            while (k > 0 && buffer[k - 1] > value) {
+                buffer[k] = buffer[k - 1];
+                k--;
+            }
+            buffer[k] = value;
         }
-        if (around.length == 0) {
-            return false; // two points: nothing to compare with
-        }
-        Arrays.sort(around);
-        int middle = around.length / 2;
-        double median = around.length % 2 == 1 ? around[middle] : (around[middle - 1] + around[middle]) / 2;
-        return intervals[index] > GAP_FACTOR * median;
+        int middle = count / 2;
+        return count % 2 == 1 ? buffer[middle] : (buffer[middle - 1] + buffer[middle]) / 2;
     }
 
     /**
