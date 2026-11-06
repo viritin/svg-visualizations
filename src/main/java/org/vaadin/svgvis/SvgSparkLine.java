@@ -1,6 +1,7 @@
 package org.vaadin.svgvis;
 
 import com.vaadin.flow.component.AttachEvent;
+import com.vaadin.flow.dom.DomEvent;
 import com.vaadin.flow.component.DetachEvent;
 import in.virit.color.Color;
 import org.vaadin.firitin.components.VSvg;
@@ -134,6 +135,8 @@ public class SvgSparkLine extends VSvg {
     private Consumer<Double> crosshairListener;
     private LineElement crosshairLine;
     private boolean crosshairEnabled = false;
+    /** The server side crosshair listeners are registered once, however often this is attached. */
+    private boolean crosshairEventsRegistered;
 
     /**
      * Creates a sparkline with fixed pixel dimensions.
@@ -546,79 +549,97 @@ public class SvgSparkLine extends VSvg {
             """.formatted(viewBoxWidth, height + 3 * fontSize));
     }
 
+    /**
+     * Wires the crosshair to the pointer, the same way for a mouse, a pen and a
+     * finger.
+     *
+     * <p>The page has to stay scrollable through the chart: on a phone a chart is
+     * often most of the screen, and a finger that lands on it to scroll the page
+     * must scroll the page. So the chart claims only horizontal movement
+     * ({@code touch-action: pan-y}) and nothing calls {@code preventDefault}. A
+     * vertical swipe is the browser's — it scrolls and cancels the pointer — and a
+     * horizontal drag, a tap, a click and a hover are the crosshair's.
+     *
+     * <p>The browser reports the position in two events. A tap or a click is a
+     * choice and goes to the server at once. Movement — a hover, a drag along the
+     * curve — is debounced, and from a finger it is only reported once it is
+     * clearly sideways: the first pixels of what becomes a scroll would otherwise
+     * show a reading the user never asked for.
+     *
+     * <p>Set up once per element: the client side checks a flag, and the server
+     * side listeners are registered the first time only, so a chart that is
+     * detached and attached again does not report everything twice.
+     */
     private void setupCrosshairEvents() {
-        String updateCrosshairJs = """
+        getElement().getStyle().set("touch-action", "pan-y");
+        getElement().executeJs("""
             const svg = this;
-            const line = svg.querySelector('line:last-of-type');
-            if (!line) return;
-            event.preventDefault();
-            const rect = svg.getBoundingClientRect();
-            const viewBoxWidth = %d;
-            let offsetX;
-            if (event.type === 'touchmove' || event.type === 'touchstart') {
-                offsetX = event.touches[0].clientX - rect.left;
-            } else {
-                offsetX = event.offsetX;
-            }
-            const relPos = Math.max(0, Math.min(1, offsetX / rect.width));
-            const x = relPos * viewBoxWidth;
-            line.setAttribute('x1', x);
-            line.setAttribute('x2', x);
-            line.setAttribute('visibility', 'visible');
-            """.formatted(viewBoxWidth);
+            if (svg.__svgvisCrosshair) return;
+            svg.__svgvisCrosshair = true;
+            const viewBoxWidth = $0;
+            const SIDEWAYS = 10;
+            let touch = null;
 
-        getElement().executeJs(
-                "this.addEventListener('mousemove', function(event) { " + updateCrosshairJs + " })");
-        getElement().addEventListener("mousemove", e -> {
-            double offsetX = e.getEventData().get("event.offsetX").asDouble();
-            double width = e.getEventData().get("element.clientWidth").asDouble();
-            double relPos = Math.max(0, Math.min(1, offsetX / width));
-            if (crosshairListener != null) {
-                crosshairListener.accept(relPos);
+            function relPos(event) {
+                const rect = svg.getBoundingClientRect();
+                return Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
             }
-        }).debounce(300).addEventData("event.offsetX").addEventData("element.clientWidth");
+            function show(pos) {
+                const line = svg.querySelector('line.sparkline-crosshair');
+                if (!line) return;
+                const x = pos * viewBoxWidth;
+                line.setAttribute('x1', x);
+                line.setAttribute('x2', x);
+                line.setAttribute('visibility', 'visible');
+            }
+            function report(name, pos) {
+                svg.dispatchEvent(new CustomEvent(name, {detail: pos}));
+            }
 
-        getElement().executeJs(
-                "this.addEventListener('touchmove', function(event) { " + updateCrosshairJs + " }, {passive: false})");
-        getElement().addEventListener("touchmove", e -> {
-            double touchX = e.getEventData().get("event.touches[0].clientX").asDouble();
-            double rectLeft = e.getEventData().get("element.getBoundingClientRect().left").asDouble();
-            double width = e.getEventData().get("element.clientWidth").asDouble();
-            double offsetX = touchX - rectLeft;
-            double relPos = Math.max(0, Math.min(1, offsetX / width));
-            if (crosshairListener != null) {
-                crosshairListener.accept(relPos);
-            }
-        }).debounce(300).addEventData("event.touches[0].clientX")
-          .addEventData("element.getBoundingClientRect().left")
-          .addEventData("element.clientWidth");
+            svg.addEventListener('pointerdown', event => {
+                if (event.pointerType !== 'mouse') {
+                    touch = {x: event.clientX, y: event.clientY, sideways: false};
+                }
+            });
+            svg.addEventListener('pointermove', event => {
+                if (event.pointerType !== 'mouse') {
+                    if (!touch) return;
+                    if (!touch.sideways) {
+                        const dx = Math.abs(event.clientX - touch.x);
+                        const dy = Math.abs(event.clientY - touch.y);
+                        if (dx < SIDEWAYS || dx < dy) return;
+                        touch.sideways = true;
+                    }
+                }
+                const pos = relPos(event);
+                show(pos);
+                report('svgvis-crosshair-move', pos);
+            });
+            const lift = () => { touch = null; };
+            svg.addEventListener('pointerup', lift);
+            svg.addEventListener('pointercancel', lift);
+            svg.addEventListener('click', event => {
+                const pos = relPos(event);
+                show(pos);
+                report('svgvis-crosshair-pick', pos);
+            });
+            """, viewBoxWidth);
 
-        getElement().executeJs(
-                "this.addEventListener('touchstart', function(event) { " + updateCrosshairJs + " }, {passive: false})");
-        getElement().addEventListener("touchstart", e -> {
-            double touchX = e.getEventData().get("event.touches[0].clientX").asDouble();
-            double rectLeft = e.getEventData().get("element.getBoundingClientRect().left").asDouble();
-            double width = e.getEventData().get("element.clientWidth").asDouble();
-            double offsetX = touchX - rectLeft;
-            double relPos = Math.max(0, Math.min(1, offsetX / width));
-            if (crosshairListener != null) {
-                crosshairListener.accept(relPos);
-            }
-        }).addEventData("event.touches[0].clientX")
-          .addEventData("element.getBoundingClientRect().left")
-          .addEventData("element.clientWidth");
+        if (crosshairEventsRegistered) {
+            return;
+        }
+        crosshairEventsRegistered = true;
+        getElement().addEventListener("svgvis-crosshair-move", this::crosshairEvent)
+                .debounce(300).addEventData("event.detail");
+        getElement().addEventListener("svgvis-crosshair-pick", this::crosshairEvent)
+                .addEventData("event.detail");
+    }
 
-        getElement().executeJs(
-                "this.addEventListener('click', function(event) { " + updateCrosshairJs + " })");
-        getElement().addEventListener("click", e -> {
-            double offsetX = e.getEventData().get("event.offsetX").asDouble();
-            double width = e.getEventData().get("element.clientWidth").asDouble();
-            double relPos = Math.max(0, Math.min(1, offsetX / width));
-            if (crosshairListener != null) {
-                crosshairListener.accept(relPos);
-            }
-        }).addEventData("event.offsetX")
-          .addEventData("element.clientWidth");
+    private void crosshairEvent(DomEvent event) {
+        double relPos = Math.max(0, Math.min(1, event.getEventData().get("event.detail").asDouble()));
+        if (crosshairListener != null) {
+            crosshairListener.accept(relPos);
+        }
     }
 
     /**

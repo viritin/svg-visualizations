@@ -33,7 +33,8 @@ A lightweight SVG-based sparkline/line chart component optimized for large datas
 **Features:**
 - Multiple data series with custom colors
 - Smoothing algorithms: None, Moving Average, RDP (Ramer-Douglas-Peucker)
-- Interactive crosshair with position callbacks
+- Interactive crosshair with position callbacks: hover or click with a mouse,
+  tap or drag sideways with a finger; a vertical swipe still scrolls the page
 - Timestamp/Instant-based data support
 - Bezier curves or polyline rendering
 - Fluid width (100%) or fixed dimensions
